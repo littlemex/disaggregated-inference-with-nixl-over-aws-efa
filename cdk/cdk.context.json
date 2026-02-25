@@ -1,0 +1,53 @@
+{
+  "vpc-provider:account=776010787911:filter.isDefault=true:region=us-east-1:returnAsymmetricSubnets=true": {
+    "vpcId": "vpc-0c9e01fb80b9bb487",
+    "vpcCidrBlock": "172.31.0.0/16",
+    "ownerAccountId": "776010787911",
+    "availabilityZones": [],
+    "subnetGroups": [
+      {
+        "name": "Public",
+        "type": "Public",
+        "subnets": [
+          {
+            "subnetId": "subnet-0e76b2788e56ebe4f",
+            "cidr": "172.31.80.0/20",
+            "availabilityZone": "us-east-1a",
+            "routeTableId": "rtb-00174dc995851ad31"
+          },
+          {
+            "subnetId": "subnet-0c4611d8eab57dcaf",
+            "cidr": "172.31.16.0/20",
+            "availabilityZone": "us-east-1b",
+            "routeTableId": "rtb-00174dc995851ad31"
+          },
+          {
+            "subnetId": "subnet-04f9ed0f631fc3ee5",
+            "cidr": "172.31.32.0/20",
+            "availabilityZone": "us-east-1c",
+            "routeTableId": "rtb-00174dc995851ad31"
+          },
+          {
+            "subnetId": "subnet-0eaeafad22e87d0ed",
+            "cidr": "172.31.0.0/20",
+            "availabilityZone": "us-east-1d",
+            "routeTableId": "rtb-00174dc995851ad31"
+          },
+          {
+            "subnetId": "subnet-07054ce1a527dedc4",
+            "cidr": "172.31.48.0/20",
+            "availabilityZone": "us-east-1e",
+            "routeTableId": "rtb-00174dc995851ad31"
+          },
+          {
+            "subnetId": "subnet-06d9d4622ed7f3021",
+            "cidr": "172.31.64.0/20",
+            "availabilityZone": "us-east-1f",
+            "routeTableId": "rtb-00174dc995851ad31"
+          }
+        ]
+      }
+    ]
+  },
+  "ami:account=776010787911:filters.image-type.0=machine:filters.name.0=Deep Learning OSS Nvidia Driver AMI GPU PyTorch * (Ubuntu 22.04) *:filters.state.0=available:owners.0=amazon:region=us-east-1": "ami-0016081b488c7376d"
+}

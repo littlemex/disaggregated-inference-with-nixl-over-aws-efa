@@ -1,0 +1,42 @@
+# CDK
+cdk/node_modules/
+cdk/cdk.out/
+cdk/*.js
+cdk/*.d.ts
+cdk/bin/*.js
+cdk/bin/*.d.ts
+cdk/lib/*.js
+cdk/lib/*.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
