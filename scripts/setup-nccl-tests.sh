@@ -26,16 +26,39 @@ sudo apt-get install -y -qq \
     openmpi-bin \
     > /dev/null 2>&1
 
-echo "[STEP 2/5] NCCL ライブラリの確認"
-if ! ldconfig -p | grep -q libnccl; then
-    echo "[WARNING] NCCL ライブラリが見つかりません"
-    echo "[INFO] CUDA toolkit に含まれる NCCL を使用します"
-    # CUDA のパスを環境変数に追加
-    export CUDA_HOME=/usr/local/cuda
-    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+echo "[STEP 2/5] NCCL コアライブラリのインストール"
+if ldconfig -p | grep -q "libnccl.so.2"; then
+    echo "[INFO] NCCL ランタイムライブラリが見つかりました"
 else
-    echo "[INFO] NCCL ライブラリが見つかりました"
-    ldconfig -p | grep libnccl | head -3
+    echo "[INFO] NCCL ランタイムライブラリが見つかりません"
+fi
+
+# NCCL 開発ライブラリ（libnccl-dev）のインストール確認
+if [ ! -f /usr/lib/x86_64-linux-gnu/libnccl.so ]; then
+    echo "[INFO] NCCL 開発ライブラリをインストールします..."
+
+    # NVIDIA CUDA リポジトリの追加（まだの場合）
+    if [ ! -f /etc/apt/sources.list.d/cuda-ubuntu2204-x86_64.list ]; then
+        wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+        sudo apt-get update -qq
+        rm -f cuda-keyring_1.1-1_all.deb
+    fi
+
+    # NCCL 開発ライブラリのインストール
+    sudo apt-get install -y -qq libnccl2 libnccl-dev > /dev/null 2>&1
+    echo "[INFO] NCCL 開発ライブラリのインストールが完了しました"
+else
+    echo "[INFO] NCCL 開発ライブラリは既にインストールされています"
+fi
+
+# インストール確認
+if [ -f /usr/lib/x86_64-linux-gnu/libnccl.so ]; then
+    NCCL_VERSION=$(dpkg -l | grep libnccl2 | awk '{print $3}')
+    echo "[INFO] NCCL バージョン: $NCCL_VERSION"
+else
+    echo "[ERROR] NCCL 開発ライブラリのインストールに失敗しました"
+    exit 1
 fi
 
 echo "[STEP 3/5] NCCL tests のクローン"
