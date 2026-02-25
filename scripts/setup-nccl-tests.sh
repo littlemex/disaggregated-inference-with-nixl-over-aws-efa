@@ -17,7 +17,7 @@ if [ -d "$NCCL_TESTS_DIR" ] && [ -f "$NCCL_TESTS_DIR/build/all_reduce_perf" ]; t
     exit 0
 fi
 
-echo "[STEP 1/4] 依存パッケージのインストール"
+echo "[STEP 1/5] 依存パッケージのインストール"
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     build-essential \
@@ -26,15 +26,34 @@ sudo apt-get install -y -qq \
     openmpi-bin \
     > /dev/null 2>&1
 
-echo "[STEP 2/4] NCCL tests のクローン"
+echo "[STEP 2/5] NCCL ライブラリの確認"
+if ! ldconfig -p | grep -q libnccl; then
+    echo "[WARNING] NCCL ライブラリが見つかりません"
+    echo "[INFO] CUDA toolkit に含まれる NCCL を使用します"
+    # CUDA のパスを環境変数に追加
+    export CUDA_HOME=/usr/local/cuda
+    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+else
+    echo "[INFO] NCCL ライブラリが見つかりました"
+    ldconfig -p | grep libnccl | head -3
+fi
+
+echo "[STEP 3/5] NCCL tests のクローン"
 sudo mkdir -p /opt
-sudo git clone https://github.com/NVIDIA/nccl-tests.git $NCCL_TESTS_DIR
+if [ -d "$NCCL_TESTS_DIR/.git" ]; then
+    echo "[INFO] リポジトリは既に存在します。最新版を取得します..."
+    cd $NCCL_TESTS_DIR
+    sudo git pull
+else
+    sudo git clone https://github.com/NVIDIA/nccl-tests.git $NCCL_TESTS_DIR
+fi
 
-echo "[STEP 3/4] NCCL tests のビルド"
+echo "[STEP 4/5] NCCL tests のビルド"
 cd $NCCL_TESTS_DIR
-sudo make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi -j$(nproc) > /dev/null 2>&1
+echo "[INFO] ビルドを開始します（数分かかります）..."
+sudo make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi -j$(nproc)
 
-echo "[STEP 4/4] インストール確認"
+echo "[STEP 5/5] インストール確認"
 if [ -f "$NCCL_TESTS_DIR/build/all_reduce_perf" ]; then
     echo "[SUCCESS] NCCL tests のインストールが完了しました"
     echo ""
