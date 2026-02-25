@@ -84,30 +84,41 @@ def setup_mlflow_tracking(
     session_expiration_duration: int = 43200
 ) -> str:
     """
-    Setup MLflow tracking by obtaining presigned URL and setting environment variable.
+    Setup MLflow tracking using ARN for IAM-based authentication.
+
+    For SageMaker Managed MLflow, the SDK supports direct ARN usage which
+    automatically handles IAM authentication. This is the recommended approach
+    for programmatic access (presigned URLs are for browser UI access only).
 
     Args:
         tracking_arn: MLflow tracking server ARN. If None, reads from MLFLOW_TRACKING_ARN env var.
-        session_expiration_duration: Session expiration in seconds (max 43200 = 12 hours)
+        session_expiration_duration: Session expiration in seconds (ignored for ARN-based auth)
 
     Returns:
-        Presigned MLflow tracking URL
+        MLflow tracking server ARN
 
     Side Effects:
         Sets MLFLOW_TRACKING_URI environment variable
     """
     import mlflow
 
-    # Get presigned URL
-    presigned_url = get_presigned_mlflow_url(tracking_arn, session_expiration_duration)
+    # Get ARN from parameter or environment variable
+    arn = tracking_arn or os.environ.get("MLFLOW_TRACKING_ARN")
 
-    # Set MLflow tracking URI
-    os.environ["MLFLOW_TRACKING_URI"] = presigned_url
-    mlflow.set_tracking_uri(presigned_url)
+    if not arn:
+        raise RuntimeError(
+            "MLflow tracking server ARN not provided. "
+            "Set MLFLOW_TRACKING_ARN environment variable or pass tracking_arn parameter."
+        )
 
-    print(f"[INFO] MLflow tracking URI configured (valid for {session_expiration_duration/3600:.1f} hours)")
+    # Set MLflow tracking URI directly to ARN
+    # The MLflow SDK will handle IAM authentication automatically
+    os.environ["MLFLOW_TRACKING_URI"] = arn
+    mlflow.set_tracking_uri(arn)
 
-    return presigned_url
+    print(f"[INFO] MLflow tracking URI configured with IAM authentication")
+
+    return arn
 
 
 if __name__ == "__main__":

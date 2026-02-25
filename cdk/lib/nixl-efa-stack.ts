@@ -203,7 +203,7 @@ export class NixlEfaStack extends Stack {
     // --- IAM Role for EC2 with SSM ---
     const ec2Role = new iam.Role(this, "NixlEfaInstanceRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
-      description: "IAM role for NIXL EFA EC2 instances with SSM and S3 access",
+      description: "IAM role for NIXL EFA EC2 instances with SSM, S3, and SageMaker MLflow access",
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore"),
       ],
@@ -228,12 +228,23 @@ export class NixlEfaStack extends Stack {
 
     // Allow access to MLflow if provided
     if (mlflowTrackingServerArn) {
+      // Control Plane: MLflow Tracking Server management operations
       ec2Role.addToPolicy(
         new iam.PolicyStatement({
+          sid: "SageMakerMLflowControlPlane",
           actions: [
             "sagemaker:DescribeMlflowTrackingServer",
             "sagemaker:CreatePresignedMlflowTrackingServerUrl",
           ],
+          resources: [mlflowTrackingServerArn],
+        })
+      );
+
+      // Data Plane: MLflow REST API calls (experiments, runs, metrics, etc.)
+      ec2Role.addToPolicy(
+        new iam.PolicyStatement({
+          sid: "SageMakerMLflowDataPlane",
+          actions: ["sagemaker-mlflow:*"],
           resources: [mlflowTrackingServerArn],
         })
       );
@@ -250,6 +261,8 @@ export class NixlEfaStack extends Stack {
         "#!/bin/bash",
         "# Set MLflow Tracking Server ARN (scripts will generate presigned URL at runtime)",
         `echo 'export MLFLOW_TRACKING_ARN="${mlflowTrackingServerArn}"' >> /etc/environment`,
+        "# Set AWS default region for CLI commands",
+        `echo 'export AWS_DEFAULT_REGION="${this.region}"' >> /etc/environment`,
         "# Install dependencies",
         "apt-get update -qq",
         "apt-get install -y -qq jq",
@@ -257,6 +270,8 @@ export class NixlEfaStack extends Stack {
     } else {
       userData.addCommands(
         "#!/bin/bash",
+        "# Set AWS default region for CLI commands",
+        `echo 'export AWS_DEFAULT_REGION="${this.region}"' >> /etc/environment`,
         "# Install dependencies",
         "apt-get update -qq",
         "apt-get install -y -qq jq",
