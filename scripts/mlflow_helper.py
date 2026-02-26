@@ -1,147 +1,208 @@
 """
-MLflow Helper - Presigned URL management for SageMaker Managed MLflow
+MLflow Helper - SageMaker Managed MLflow 接続ヘルパー
 
-This module provides helper functions to obtain presigned URLs for SageMaker
-Managed MLflow tracking servers and initialize MLflow clients.
+sagemaker-mlflow プラグインを使用して、ARN ベースの SigV4 認証で
+SageMaker Managed MLflow に接続します。
+
+必要なパッケージ:
+  pip install sagemaker-mlflow
+
+仕組み:
+  sagemaker-mlflow プラグインは MLflow の entry_points に以下を登録します:
+  - mlflow.tracking_store: "arn" -> MlflowSageMakerStore
+  - mlflow.request_auth_provider: "arn" -> AuthProvider (SigV4)
+  - mlflow.request_header_provider: "arn" -> MlflowSageMakerRequestHeaderProvider
+
+  tracking URI に ARN を設定すると、プラグインが自動的に:
+  1. ARN からリージョンとサーバー名を解析
+  2. https://{region}.experiments.sagemaker.aws エンドポイントに接続
+  3. 各リクエストに SigV4 認証ヘッダーを付与
+  4. x-mlflow-sm-tracking-server-arn ヘッダーを追加
 """
 
 import os
 import sys
-import json
-import subprocess
+import logging
 from typing import Optional
 
+logger = logging.getLogger(__name__)
 
-def get_presigned_mlflow_url(
-    tracking_arn: Optional[str] = None,
-    session_expiration_duration: int = 43200  # 12 hours in seconds
-) -> str:
-    """
-    Obtain a presigned URL for SageMaker Managed MLflow tracking server.
 
-    Args:
-        tracking_arn: MLflow tracking server ARN. If None, reads from MLFLOW_TRACKING_ARN env var.
-        session_expiration_duration: Session expiration in seconds (max 43200 = 12 hours)
+def _verify_plugin_installed() -> bool:
+    """sagemaker-mlflow プラグインがインストールされているか確認する。
 
     Returns:
-        Presigned MLflow tracking URL
-
-    Raises:
-        RuntimeError: If ARN is not provided or AWS CLI command fails
+        True: プラグインが利用可能
+        False: プラグインが見つからない
     """
-    # Get ARN from parameter or environment variable
-    arn = tracking_arn or os.environ.get("MLFLOW_TRACKING_ARN")
-
-    if not arn:
-        raise RuntimeError(
-            "MLflow tracking server ARN not provided. "
-            "Set MLFLOW_TRACKING_ARN environment variable or pass tracking_arn parameter."
-        )
-
-    # Parse ARN to extract tracking server name
-    # ARN format: arn:aws:sagemaker:{region}:{account}:mlflow-tracking-server/{name}
     try:
-        tracking_server_name = arn.split("/")[-1]
-    except (IndexError, AttributeError):
-        raise RuntimeError(f"Invalid MLflow tracking server ARN format: {arn}")
+        import sagemaker_mlflow  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
-    # Execute AWS CLI command to get presigned URL
-    cmd = [
-        "aws", "sagemaker", "create-presigned-mlflow-tracking-server-url",
-        "--tracking-server-name", tracking_server_name,
-        "--session-expiration-duration-in-seconds", str(session_expiration_duration),
-        "--output", "json"
-    ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
+def _verify_entry_points() -> dict:
+    """MLflow プラグインのエントリポイント登録状態を確認する。
 
-        response = json.loads(result.stdout)
-        presigned_url = response.get("AuthorizedUrl")
+    Returns:
+        各エントリポイントグループの登録状態を示す辞書
+    """
+    import pkg_resources
 
-        if not presigned_url:
-            raise RuntimeError(f"No AuthorizedUrl in response: {result.stdout}")
+    results = {}
+    for group in [
+        "mlflow.tracking_store",
+        "mlflow.request_auth_provider",
+        "mlflow.request_header_provider",
+    ]:
+        eps = list(pkg_resources.iter_entry_points(group))
+        arn_eps = [ep for ep in eps if ep.name == "arn"]
+        results[group] = len(arn_eps) > 0
 
-        return presigned_url
-
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            f"Failed to get presigned MLflow URL: {e.stderr}"
-        ) from e
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"Failed to parse AWS CLI response: {result.stdout}"
-        ) from e
+    return results
 
 
 def setup_mlflow_tracking(
     tracking_arn: Optional[str] = None,
-    session_expiration_duration: int = 43200
 ) -> str:
-    """
-    Setup MLflow tracking using presigned URL with IAM-based authentication.
+    """SageMaker Managed MLflow の tracking を設定する。
 
-    For SageMaker Managed MLflow, we generate a presigned URL using boto3
-    which handles IAM authentication automatically. The MLflow client then
-    uses this URL to access the tracking server.
+    sagemaker-mlflow プラグインを使用して、ARN ベースの SigV4 認証で
+    MLflow tracking server に接続します。presigned URL は不要です。
 
     Args:
-        tracking_arn: MLflow tracking server ARN. If None, reads from MLFLOW_TRACKING_ARN env var.
-        session_expiration_duration: Session expiration in seconds (max 43200 = 12 hours)
+        tracking_arn: MLflow tracking server の ARN。
+            未指定の場合は MLFLOW_TRACKING_ARN 環境変数から取得。
 
     Returns:
-        Presigned MLflow tracking URL
+        設定された tracking URI (= ARN)
 
-    Side Effects:
-        Sets MLFLOW_TRACKING_URI environment variable
+    Raises:
+        RuntimeError: ARN が未指定、プラグイン未インストール、
+            または設定に失敗した場合
     """
-    import mlflow
-    import boto3
+    # --- 1. sagemaker-mlflow プラグインの確認 ---
+    if not _verify_plugin_installed():
+        raise RuntimeError(
+            "sagemaker-mlflow プラグインがインストールされていません。\n"
+            "以下のコマンドでインストールしてください:\n"
+            "  pip install --user sagemaker-mlflow\n\n"
+            "または install-mlflow-deps.sh を実行してください:\n"
+            "  bash install-mlflow-deps.sh"
+        )
 
-    # Get ARN from parameter or environment variable
+    # --- 2. ARN の取得と検証 ---
     arn = tracking_arn or os.environ.get("MLFLOW_TRACKING_ARN")
 
     if not arn:
         raise RuntimeError(
-            "MLflow tracking server ARN not provided. "
-            "Set MLFLOW_TRACKING_ARN environment variable or pass tracking_arn parameter."
+            "MLflow tracking server ARN が指定されていません。\n"
+            "以下のいずれかの方法で設定してください:\n"
+            "  1. MLFLOW_TRACKING_ARN 環境変数を設定\n"
+            "     export MLFLOW_TRACKING_ARN=arn:aws:sagemaker:<region>:<account>:mlflow-tracking-server/<name>\n"
+            "  2. tracking_arn パラメータに ARN を渡す\n"
+            "  3. source /etc/environment を実行（CDK デプロイ環境の場合）"
         )
 
-    # Extract tracking server name from ARN
-    # ARN format: arn:aws:sagemaker:{region}:{account}:mlflow-tracking-server/{name}
+    # ARN 形式の基本検証
+    if not arn.startswith("arn:aws:sagemaker:"):
+        raise RuntimeError(
+            f"無効な ARN 形式です: {arn}\n"
+            "正しい形式: arn:aws:sagemaker:<region>:<account>:mlflow-tracking-server/<name>"
+        )
+
+    parts = arn.split(":")
+    if len(parts) < 6 or "/" not in parts[5]:
+        raise RuntimeError(
+            f"ARN の解析に失敗しました: {arn}\n"
+            "正しい形式: arn:aws:sagemaker:<region>:<account>:mlflow-tracking-server/<name>"
+        )
+
+    region = parts[3]
+    resource_type = parts[5].split("/")[0]
+    resource_name = parts[5].split("/")[1]
+
+    logger.info(f"MLflow tracking server: {resource_name} (region: {region})")
+
+    # --- 3. エントリポイントの確認 ---
+    ep_status = _verify_entry_points()
+    missing = [k for k, v in ep_status.items() if not v]
+    if missing:
+        logger.warning(
+            "以下のエントリポイントが未登録です: %s\n"
+            "sagemaker-mlflow を再インストールしてください: "
+            "pip install --user --force-reinstall sagemaker-mlflow",
+            ", ".join(missing),
+        )
+
+    # --- 4. AWS 認証情報の確認 ---
     try:
-        tracking_server_name = arn.split("/")[-1]
-    except (IndexError, AttributeError):
-        raise RuntimeError(f"Invalid MLflow tracking server ARN format: {arn}")
+        import boto3
+        sts = boto3.client("sts", region_name=region)
+        identity = sts.get_caller_identity()
+        logger.info(f"AWS identity: {identity['Arn']}")
+    except Exception as e:
+        raise RuntimeError(
+            f"AWS 認証情報の取得に失敗しました: {e}\n"
+            "IAM ロールまたは AWS 認証情報が正しく設定されているか確認してください。"
+        ) from e
 
-    # Get presigned URL using boto3
-    sagemaker_client = boto3.client('sagemaker')
-    response = sagemaker_client.create_presigned_mlflow_tracking_server_url(
-        TrackingServerName=tracking_server_name,
-        SessionExpirationDurationInSeconds=session_expiration_duration
-    )
+    # --- 5. MLflow tracking URI の設定 ---
+    # sagemaker-mlflow プラグインは tracking URI が ARN の場合に自動的に有効化されます。
+    # プラグインが以下を処理します:
+    #   - ARN -> エンドポイント URL の変換
+    #   - SigV4 認証ヘッダーの生成
+    #   - x-mlflow-sm-tracking-server-arn ヘッダーの追加
+    import mlflow
 
-    presigned_url = response['AuthorizedUrl']
+    os.environ["MLFLOW_TRACKING_URI"] = arn
+    mlflow.set_tracking_uri(arn)
 
-    # Set MLflow tracking URI
-    os.environ["MLFLOW_TRACKING_URI"] = presigned_url
-    mlflow.set_tracking_uri(presigned_url)
+    print(f"[INFO] MLflow tracking URI を設定しました")
+    print(f"  Server:   {resource_name}")
+    print(f"  Region:   {region}")
+    print(f"  Type:     {resource_type}")
+    print(f"  Auth:     SigV4 (sagemaker-mlflow plugin)")
 
-    print(f"[INFO] MLflow tracking URI configured (valid for {session_expiration_duration/3600:.1f} hours)")
+    # --- 6. 接続テスト ---
+    try:
+        # experiments の一覧取得で接続を確認
+        client = mlflow.MlflowClient()
+        # search_experiments は軽量な API コール
+        _ = client.search_experiments(max_results=1)
+        print(f"  Status:   [OK] 接続成功")
+    except Exception as e:
+        error_msg = str(e)
+        print(f"  Status:   [ERROR] 接続失敗")
+        print(f"  Detail:   {error_msg}")
 
-    return presigned_url
+        # よくあるエラーのトラブルシューティング
+        if "403" in error_msg or "Forbidden" in error_msg:
+            print("\n[TROUBLESHOOTING] 403 エラーの原因:")
+            print("  1. IAM ロールに sagemaker-mlflow:* 権限がない")
+            print("  2. IAM ロールに sagemaker:DescribeMlflowTrackingServer 権限がない")
+            print("  3. tracking server が別のリージョンにある")
+            print("  4. tracking server 名が間違っている")
+        elif "timeout" in error_msg.lower() or "connect" in error_msg.lower():
+            print("\n[TROUBLESHOOTING] 接続タイムアウト:")
+            print("  1. VPC からインターネットへの接続を確認")
+            print("  2. セキュリティグループの outbound ルールを確認")
+
+        raise RuntimeError(
+            f"MLflow tracking server への接続に失敗しました: {e}"
+        ) from e
+
+    return arn
 
 
 if __name__ == "__main__":
-    # CLI usage for testing
+    # CLI 使用（テスト用）
+    logging.basicConfig(level=logging.INFO)
+
     try:
-        url = get_presigned_mlflow_url()
-        print(f"Presigned MLflow URL: {url}")
+        uri = setup_mlflow_tracking()
+        print(f"\n[OK] MLflow tracking URI: {uri}")
     except Exception as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
+        print(f"\n[ERROR] {e}", file=sys.stderr)
         sys.exit(1)

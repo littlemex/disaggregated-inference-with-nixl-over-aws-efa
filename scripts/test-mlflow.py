@@ -30,10 +30,10 @@ def test_mlflow_connectivity(experiment_name: str = "nixl-efa-test") -> bool:
     print("="*80)
 
     try:
-        # Setup MLflow tracking
+        # Setup MLflow tracking (sagemaker-mlflow plugin handles SigV4 auth)
         print("\n[STEP 1] Setting up MLflow tracking...")
         tracking_uri = setup_mlflow_tracking()
-        print(f"  Tracking URI: {tracking_uri[:50]}...")
+        print(f"  Tracking URI (ARN): {tracking_uri}")
 
         # Create or get experiment
         print(f"\n[STEP 2] Creating/getting experiment: {experiment_name}")
