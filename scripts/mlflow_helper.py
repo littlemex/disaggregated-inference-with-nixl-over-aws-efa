@@ -84,23 +84,24 @@ def setup_mlflow_tracking(
     session_expiration_duration: int = 43200
 ) -> str:
     """
-    Setup MLflow tracking using ARN for IAM-based authentication.
+    Setup MLflow tracking using presigned URL with IAM-based authentication.
 
-    For SageMaker Managed MLflow, the SDK supports direct ARN usage which
-    automatically handles IAM authentication. This is the recommended approach
-    for programmatic access (presigned URLs are for browser UI access only).
+    For SageMaker Managed MLflow, we generate a presigned URL using boto3
+    which handles IAM authentication automatically. The MLflow client then
+    uses this URL to access the tracking server.
 
     Args:
         tracking_arn: MLflow tracking server ARN. If None, reads from MLFLOW_TRACKING_ARN env var.
-        session_expiration_duration: Session expiration in seconds (ignored for ARN-based auth)
+        session_expiration_duration: Session expiration in seconds (max 43200 = 12 hours)
 
     Returns:
-        MLflow tracking server ARN
+        Presigned MLflow tracking URL
 
     Side Effects:
         Sets MLFLOW_TRACKING_URI environment variable
     """
     import mlflow
+    import boto3
 
     # Get ARN from parameter or environment variable
     arn = tracking_arn or os.environ.get("MLFLOW_TRACKING_ARN")
@@ -111,14 +112,29 @@ def setup_mlflow_tracking(
             "Set MLFLOW_TRACKING_ARN environment variable or pass tracking_arn parameter."
         )
 
-    # Set MLflow tracking URI directly to ARN
-    # The MLflow SDK will handle IAM authentication automatically
-    os.environ["MLFLOW_TRACKING_URI"] = arn
-    mlflow.set_tracking_uri(arn)
+    # Extract tracking server name from ARN
+    # ARN format: arn:aws:sagemaker:{region}:{account}:mlflow-tracking-server/{name}
+    try:
+        tracking_server_name = arn.split("/")[-1]
+    except (IndexError, AttributeError):
+        raise RuntimeError(f"Invalid MLflow tracking server ARN format: {arn}")
 
-    print(f"[INFO] MLflow tracking URI configured with IAM authentication")
+    # Get presigned URL using boto3
+    sagemaker_client = boto3.client('sagemaker')
+    response = sagemaker_client.create_presigned_mlflow_tracking_server_url(
+        TrackingServerName=tracking_server_name,
+        SessionExpirationDurationInSeconds=session_expiration_duration
+    )
 
-    return arn
+    presigned_url = response['AuthorizedUrl']
+
+    # Set MLflow tracking URI
+    os.environ["MLFLOW_TRACKING_URI"] = presigned_url
+    mlflow.set_tracking_uri(presigned_url)
+
+    print(f"[INFO] MLflow tracking URI configured (valid for {session_expiration_duration/3600:.1f} hours)")
+
+    return presigned_url
 
 
 if __name__ == "__main__":
