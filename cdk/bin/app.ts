@@ -14,6 +14,7 @@ const app = new App();
  * Get stack name based on environment and deployment context
  *
  * Naming patterns:
+ * - With prefix: {prefix}-{namespace}-{environment}-{region-short}
  * - Standard: {namespace}-{environment}-{region-short}
  * - Feature branch: {namespace}-{branch}-{short-hash}
  * - Manual override: use -c stackName=CustomName
@@ -29,14 +30,17 @@ function getStackName(
     return manualStackName;
   }
 
-  // 2. Environment-based naming (standard)
+  // 2. Project prefix support (for avoiding stack name collisions)
+  const projectPrefix = app.node.tryGetContext("projectPrefix");
+
+  // 3. Environment-based naming (standard)
   const environment = app.node.tryGetContext("environment") || defaultEnvironment;
   const region = process.env.CDK_DEFAULT_REGION || "us-west-2";
 
   // Shorten region name for brevity (us-west-2 -> west-2)
   const regionShort = region.replace(/^(us|eu|ap|ca|sa|me|af)-/, "");
 
-  // 3. Feature branch support (optional)
+  // 4. Feature branch support (optional)
   const branch = app.node.tryGetContext("branch");
   if (branch && branch !== "main" && branch !== "master") {
     // Sanitize branch name (remove special characters)
@@ -48,11 +52,13 @@ function getStackName(
     const gitHash = app.node.tryGetContext("gitHash");
     const hashSuffix = gitHash ? `-${gitHash.substring(0, 7)}` : "";
 
-    return `${namespace}-${sanitizedBranch}${hashSuffix}`;
+    const baseName = `${namespace}-${sanitizedBranch}${hashSuffix}`;
+    return projectPrefix ? `${projectPrefix}-${baseName}` : baseName;
   }
 
-  // 4. Standard naming: namespace-environment-region
-  return `${namespace}-${environment}-${regionShort}`;
+  // 5. Standard naming: [prefix-]namespace-environment-region
+  const baseName = `${namespace}-${environment}-${regionShort}`;
+  return projectPrefix ? `${projectPrefix}-${baseName}` : baseName;
 }
 
 /**
@@ -76,11 +82,15 @@ function getStackTags(app: App): Record<string, string> {
 // MLflow Stack
 // ========================================
 
+const projectPrefix = app.node.tryGetContext("projectPrefix");
 const vpcId = app.node.tryGetContext("vpcId");
 const createVpc = app.node.tryGetContext("createVpc") === "true";
 const trackingServerSize = app.node.tryGetContext("trackingServerSize");
 const bucketName = app.node.tryGetContext("bucketName");
-const trackingServerName = app.node.tryGetContext("trackingServerName") || "mlflow-tracking-server";
+const trackingServerNameBase = app.node.tryGetContext("trackingServerName") || "mlflow-tracking-server";
+const trackingServerName = projectPrefix
+  ? `${projectPrefix}-${trackingServerNameBase}`
+  : trackingServerNameBase;
 const allowedCidrsRaw = app.node.tryGetContext("allowedCidrs");
 const allowedCidrs = allowedCidrsRaw
   ? (allowedCidrsRaw as string).split(",")
@@ -126,7 +136,8 @@ const useCapacityBlock = app.node.tryGetContext("useCapacityBlock") === "true";
 const capacityReservationId = app.node.tryGetContext("capacityReservationId");
 
 // Get MLflow ARN from MLflow stack output
-const mlflowArn = mlflowStack.trackingServer?.attrTrackingServerArn;
+// Remove optional chaining to ensure mlflowArn is always defined
+const mlflowArn = mlflowStack.trackingServer.attrTrackingServerArn;
 
 // Generate unique stack name for NIXL EFA
 const nixlEfaStackName = getStackName(app, "nixl-efa", "dev");
@@ -147,6 +158,9 @@ const nixlEfaStack = new NixlEfaStack(app, nixlEfaStackName, {
     region: process.env.CDK_DEFAULT_REGION || "us-east-1",
   },
 });
+
+// Explicitly define stack dependency to ensure MLflow is deployed first
+nixlEfaStack.addDependency(mlflowStack);
 
 // Apply common tags to NIXL EFA stack
 Object.entries(commonTags).forEach(([key, value]) => {
