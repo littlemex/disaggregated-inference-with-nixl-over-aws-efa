@@ -89,6 +89,7 @@ usage() {
     echo "  deploy                Deploy scripts to S3"
     echo "  run <layer|pattern>   Run a layer (L0, L1, ...) or single pattern"
     echo "  run all               Run all layers in priority order"
+    echo "  collect-results       Collect results from remote nodes"
     echo "  status                Check measurement progress"
     echo "  list                  List available task definitions"
     echo ""
@@ -97,6 +98,7 @@ usage() {
     echo "  $0 phase14 run L0"
     echo "  $0 phase14 run p14-unified-1k"
     echo "  $0 phase14 run all"
+    echo "  $0 phase14 collect-results"
     echo "  $0 phase14 status"
     echo ""
     echo "Environment variables:"
@@ -171,16 +173,37 @@ run_single_pattern() {
     local pattern_id="$2"
     local task_dir="$SCRIPT_DIR/task-definitions/$phase"
     local consumer_dir="$task_dir/consumer"
+    local client_dir="$task_dir/client"
 
-    # Determine if this is a unified or disaggregated pattern
+    # Determine if this is a unified, disaggregated, or low-level dual-node pattern
     local producer_json="$task_dir/$pattern_id.json"
     local consumer_json="$consumer_dir/$pattern_id-consumer.json"
+    local client_json="$client_dir/$pattern_id-client.json"
 
     if [ ! -f "$producer_json" ]; then
         error "Task definition not found: $producer_json"
     fi
 
-    if [ -f "$consumer_json" ]; then
+    if [ -f "$client_json" ]; then
+        # Low-level dual-node: Run Server on Node1, Client on Node2
+        info "Low-level dual-node pattern detected. Running Server on Node1, Client on Node2."
+        echo ""
+
+        log "Starting Server on Node1 ($NODE1_ID)..."
+        run_task_on_node "$producer_json" "$NODE1_ID" &
+        local server_pid=$!
+
+        # Wait for server to start before launching client
+        log "Waiting 10 seconds for server to start..."
+        sleep 10
+
+        log "Starting Client on Node2 ($NODE2_ID)..."
+        run_task_on_node "$client_json" "$NODE2_ID"
+
+        # Wait for Server to complete
+        wait $server_pid 2>/dev/null || true
+        success "Pattern $pattern_id completed (dual-node)"
+    elif [ -f "$consumer_json" ]; then
         # Disaggregated: Run Consumer first, then Producer
         info "Disaggregated pattern detected. Running Consumer first, then Producer."
         echo ""
@@ -225,18 +248,21 @@ run_layer() {
 
     # Extract pattern IDs for the specified layer using Python
     local patterns
-    patterns=$(python3 -c "
+    patterns=$(python3 - "$plan_file" "$layer_id" <<'PYEOF'
 import json, sys
-with open('$plan_file') as f:
+plan_file = sys.argv[1]
+layer_id = sys.argv[2]
+with open(plan_file) as f:
     plan = json.load(f)
 for layer in plan['layers']:
-    if layer.get('id') == '$layer_id':
+    if layer.get('id') == layer_id:
         for p in layer['patterns']:
             print(p['id'])
         sys.exit(0)
 print('LAYER_NOT_FOUND', file=sys.stderr)
 sys.exit(1)
-" 2>&1)
+PYEOF
+    )
 
     if [ $? -ne 0 ]; then
         error "Layer $layer_id not found in $plan_file"
@@ -269,13 +295,15 @@ run_all_layers() {
 
     # Extract layer IDs in order
     local layer_ids
-    layer_ids=$(python3 -c "
-import json
-with open('$plan_file') as f:
+    layer_ids=$(python3 - "$plan_file" <<'PYEOF'
+import json, sys
+plan_file = sys.argv[1]
+with open(plan_file) as f:
     plan = json.load(f)
 for layer in plan['layers']:
     print(layer.get('id', ''))
-")
+PYEOF
+    )
 
     info "Running all layers for $phase"
     while IFS= read -r layer_id; do
@@ -311,6 +339,80 @@ do_run() {
             run_single_pattern "$phase" "$target"
             ;;
     esac
+}
+
+# ---- Collect Results ----
+
+ssm_download_results() {
+    local instance_id="$1"
+    local remote_dir="$2"
+    local local_dir="$3"
+    local node_name="$4"
+
+    log "Collecting results from $node_name ($instance_id)..."
+
+    # List result files on remote node
+    local file_list
+    file_list=$(ssm_run_command "$instance_id" \
+        "ls -1 $remote_dir/*.json 2>/dev/null || echo 'NO_FILES'") || true
+
+    if [ "$file_list" = "NO_FILES" ] || [ -z "$file_list" ]; then
+        info "No result files found on $node_name at $remote_dir"
+        return 0
+    fi
+
+    # Copy each result file via S3 as intermediary
+    local count=0
+    while IFS= read -r remote_file; do
+        [ -z "$remote_file" ] && continue
+        local filename
+        filename=$(basename "$remote_file")
+        local s3_key="results-transfer/$node_name/$filename"
+
+        # Upload from remote node to S3
+        ssm_run_command "$instance_id" \
+            "aws s3 cp $remote_file s3://$SCRIPTS_BUCKET/$s3_key --quiet" || {
+            echo "[WARNING] Failed to upload $filename from $node_name"
+            continue
+        }
+
+        # Download from S3 to local
+        aws s3 cp "s3://$SCRIPTS_BUCKET/$s3_key" "$local_dir/$filename" --quiet || {
+            echo "[WARNING] Failed to download $filename from S3"
+            continue
+        }
+
+        count=$((count + 1))
+    done <<< "$file_list"
+
+    success "Collected $count result files from $node_name"
+}
+
+do_collect_results() {
+    local phase="$1"
+    local results_dir="$SCRIPT_DIR/results/$phase"
+
+    mkdir -p "$results_dir"
+
+    log "Collecting results for $phase..."
+
+    # Collect from Node1
+    ssm_download_results "$NODE1_ID" "/tmp/low-level-results" "$results_dir" "Node1"
+
+    # Collect from Node2
+    ssm_download_results "$NODE2_ID" "/tmp/low-level-results" "$results_dir" "Node2"
+
+    echo ""
+    local total
+    total=$(find "$results_dir" -name "*.json" 2>/dev/null | wc -l)
+    success "Total result files collected: $total"
+    info "Results directory: $results_dir"
+
+    if [ "$total" -gt 0 ]; then
+        echo ""
+        echo "Collected files:"
+        find "$results_dir" -name "*.json" -printf '  %f\n' | sort
+    fi
 }
 
 # ---- Status ----
@@ -366,11 +468,12 @@ do_list() {
     # Group by layer using the experiment plan
     local plan_file="$SCRIPT_DIR/experiment-plans/$phase.json"
     if [ -f "$plan_file" ]; then
-        python3 -c "
-import json, os
-with open('$plan_file') as f:
+        python3 - "$plan_file" "$task_dir" <<'PYEOF'
+import json, os, sys
+plan_file = sys.argv[1]
+task_dir = sys.argv[2]
+with open(plan_file) as f:
     plan = json.load(f)
-task_dir = '$task_dir'
 for layer in plan['layers']:
     lid = layer.get('id', '?')
     name = layer.get('name', '')
@@ -383,7 +486,7 @@ for layer in plan['layers']:
         status = '[OK]' if exists else '[MISSING]'
         print(f'    {status} {pid}')
     print()
-"
+PYEOF
     else
         find "$task_dir" -maxdepth 1 -name "*.json" | sort | while read -r f; do
             echo "  $(basename "$f")"
@@ -407,6 +510,9 @@ case "$ACTION" in
         ;;
     run)
         do_run "$PHASE" "$@"
+        ;;
+    collect-results)
+        do_collect_results "$PHASE"
         ;;
     status)
         do_status "$PHASE"

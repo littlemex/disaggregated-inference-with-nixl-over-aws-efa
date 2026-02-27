@@ -1,0 +1,40 @@
+{
+  "name": "Low-Level: ucx_perftest {{ test_type }} Server - {{ message_size_human }} - {{ transport }}",
+  "description": "UCX bandwidth/latency measurement server: test={{ test_type }}, size={{ message_size }}, mem={{ memory_type }}, transport={{ transport }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-verify-ucx",
+      "name": "Verify UCX Installation",
+      "description": "Check ucx_perftest binary and SRD transport",
+      "commands": [
+        "command -v ucx_perftest >/dev/null 2>&1 || { echo '[ERROR] ucx_perftest not found'; exit 1; }",
+        "ucx_info -d 2>&1 | grep -i srd && echo '[OK] SRD transport available' || echo '[WARNING] SRD transport not detected'",
+        "echo '[OK] UCX installation verified'"
+      ]
+    },
+    {
+      "id": "03-run-server",
+      "name": "Start ucx_perftest Server",
+      "description": "Start ucx_perftest server on port 9999 and wait for client to complete",
+      "commands": [
+        "pkill -f 'ucx_perftest.*9999' 2>/dev/null || true",
+        "sleep 1",
+        "echo '[INFO] Starting ucx_perftest server on port 9999...'",
+        "UCX_TLS={{ transport }} timeout 600 ucx_perftest -p 9999 > ${OUTPUT_DIR}/{{ pattern_id }}_server.log 2>&1 || true",
+        "echo '[OK] ucx_perftest server session completed'"
+      ]
+    }
+  ]
+}

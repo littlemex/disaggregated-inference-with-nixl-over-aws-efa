@@ -1,0 +1,104 @@
+{
+  "name": "Low-Level: ucx_perftest {{ test_type }} - {{ message_size_human }} - {{ transport }}",
+  "description": "UCX bandwidth/latency measurement: test={{ test_type }}, size={{ message_size }}, mem={{ memory_type }}, transport={{ transport }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results",
+    "OUTPUT_FILE": "/tmp/low-level-results/{{ pattern_id }}.json",
+    "NODE1_PRIVATE": "{% raw %}{{NODE1_PRIVATE}}{% endraw %}"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-verify-ucx",
+      "name": "Verify UCX Installation",
+      "description": "Check ucx_perftest binary and SRD transport",
+      "commands": [
+        "command -v ucx_perftest >/dev/null 2>&1 || { echo '[ERROR] ucx_perftest not found'; exit 1; }",
+        "ucx_info -d 2>&1 | grep -i srd && echo '[OK] SRD transport available' || echo '[WARNING] SRD transport not detected'",
+        "echo '[OK] UCX installation verified'"
+      ]
+    },
+    {
+      "id": "03-start-server",
+      "name": "Start ucx_perftest Server",
+      "description": "Start ucx_perftest server on port 9999",
+      "commands": [
+        "pkill -f 'ucx_perftest.*9999' 2>/dev/null || true",
+        "sleep 1",
+        "UCX_TLS={{ transport }} nohup ucx_perftest -p 9999 > {% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_server.log 2>&1 &",
+        "sleep 3",
+        "echo '[OK] ucx_perftest server started on port 9999'"
+      ]
+    },
+    {
+      "id": "04-run-client",
+      "name": "Run ucx_perftest Client ({{ test_type }}, {{ message_size_human }})",
+      "description": "Execute UCX performance test",
+      "commands": [
+        "if [ -z \"$NODE1_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE not set'; exit 1; fi",
+        "echo '[INFO] Running ucx_perftest: type={{ test_type }}, size={{ message_size }}, mem={{ memory_type }}, transport={{ transport }}'",
+        "RAW_OUTPUT=$(UCX_TLS={{ transport }} UCX_PROTO_INFO=y ucx_perftest -m {{ memory_type }} $NODE1_PRIVATE -t {{ test_type }} -s {{ message_size }} -n {{ iterations }} -p 9999 2>&1)",
+        "echo \"$RAW_OUTPUT\"",
+        "echo \"$RAW_OUTPUT\" > {% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_raw.log",
+        "python3 -c \"",
+        "import json, re",
+        "with open('{% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_raw.log') as f:",
+        "    raw = f.read()",
+        "result = {",
+        "    'tool': 'ucx_perftest',",
+        "    'pattern_id': '{{ pattern_id }}',",
+        "    'test_type': '{{ test_type }}',",
+        "    'message_size': {{ message_size }},",
+        "    'message_size_human': '{{ message_size_human }}',",
+        "    'memory_type': '{{ memory_type }}',",
+        "    'transport': '{{ transport }}',",
+        "    'iterations': {{ iterations }},",
+        "}",
+        "lines = raw.strip().split('\\n')",
+        "for line in lines:",
+        "    parts = line.split()",
+        "    if len(parts) >= 5 and parts[0].replace('.', '').isdigit():",
+        "        try:",
+        "            result['measured_message_size'] = float(parts[0])",
+        "            result['iterations_completed'] = int(float(parts[1]))",
+        "            result['latency_us'] = float(parts[4]) if len(parts) > 4 else None",
+        "            result['bandwidth_mbps'] = float(parts[3]) if len(parts) > 3 else None",
+        "            if result.get('bandwidth_mbps'):",
+        "                result['bandwidth_gbps'] = result['bandwidth_mbps'] / 1000",
+        "        except (ValueError, IndexError):",
+        "            pass",
+        "with open('{% raw %}{{OUTPUT_FILE}}{% endraw %}', 'w') as f:",
+        "    json.dump(result, f, indent=2)",
+        "print('[OK] ucx_perftest results parsed and saved')",
+        "\""
+      ]
+    },
+    {
+      "id": "05-stop-server",
+      "name": "Stop ucx_perftest Server",
+      "description": "Terminate server process",
+      "commands": [
+        "pkill -f 'ucx_perftest.*9999' 2>/dev/null || true",
+        "echo '[OK] Server stopped'"
+      ]
+    },
+    {
+      "id": "06-collect-results",
+      "name": "Collect Results",
+      "description": "Display measurement results",
+      "commands": [
+        "echo '--- ucx_perftest Results ---'",
+        "cat {% raw %}{{OUTPUT_FILE}}{% endraw %} 2>/dev/null | python3 -m json.tool || echo '[INFO] Results file not found'",
+        "echo '--- End Results ---'"
+      ]
+    }
+  ]
+}

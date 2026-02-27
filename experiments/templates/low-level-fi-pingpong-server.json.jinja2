@@ -1,0 +1,57 @@
+{
+  "name": "Low-Level: {{ tool }} {{ provider|upper }} Server - {{ message_sizes|join(', ') }}",
+  "description": "EFA basic latency measurement server using {{ tool }} with provider={{ provider }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results",
+    "OUTPUT_FILE": "/tmp/low-level-results/{{ pattern_id }}-server.json"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "description": "Create directory for measurement results",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-verify-efa-device",
+      "name": "Verify EFA Device",
+      "description": "Verify EFA device is available",
+      "commands": [
+        "fi_info -p {{ provider }} -t FI_EP_RDM 2>/dev/null | head -5 || { echo '[ERROR] EFA device not found'; exit 1; }",
+        "echo '[OK] EFA device available'"
+      ]
+    },
+    {
+      "id": "03-run-server",
+      "name": "Run {{ tool }} Server ({{ message_sizes|length }} sizes)",
+      "description": "Run {{ tool }} server for each message size sequentially, wait for client to connect",
+      "commands": [
+{% for size in message_sizes %}
+        "echo '[INFO] === Message size: {{ size }} ({{ loop.index }}/{{ message_sizes|length }}) ==='",
+        "echo '[INFO] Starting server for size {{ size }}...'",
+        "timeout 120 {{ tool }} -p {{ provider }}{% if size != 'default' %} -S {{ size }}{% endif %} -I {{ iterations }} > {% raw %}${OUTPUT_DIR}{% endraw %}/{{ pattern_id }}_server_{{ size }}.log 2>&1 || true",
+        "echo '[OK] Server for size {{ size }} done'",
+        "sleep 2",
+{% endfor %}
+        "echo '[OK] All server runs completed'"
+      ]
+    },
+    {
+      "id": "04-collect-results",
+      "name": "Collect Server Logs",
+      "description": "Display server-side logs",
+      "commands": [
+        "echo '--- {{ tool }} Server Logs ---'",
+{% for size in message_sizes %}
+        "echo '=== Size {{ size }} ==='",
+        "cat {% raw %}${OUTPUT_DIR}{% endraw %}/{{ pattern_id }}_server_{{ size }}.log 2>/dev/null || echo '[INFO] Log not found'",
+{% endfor %}
+        "echo '--- End Server Logs ---'"
+      ]
+    }
+  ]
+}

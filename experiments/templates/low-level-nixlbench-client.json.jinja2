@@ -1,0 +1,109 @@
+{
+  "name": "Low-Level: NIXLBench {{ backend }} Client - {{ message_size_human }} - {{ scheme }} t={{ num_threads }}",
+  "description": "NIXL VRAM-to-VRAM transfer measurement (initiator): backend={{ backend }}, size={{ message_size }}, scheme={{ scheme }}, threads={{ num_threads }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results",
+    "OUTPUT_FILE": "/tmp/low-level-results/{{ pattern_id }}.json",
+    "ETCD_ENDPOINT": "http://{% raw %}{{NODE1_PRIVATE}}{% endraw %}:{{ infrastructure.etcd_port }}",
+    "NIXL_PATH": "{{ infrastructure.nixl_path }}",
+    "NODE1_PRIVATE": "{% raw %}{{NODE1_PRIVATE}}{% endraw %}"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-verify-nixlbench",
+      "name": "Verify NIXLBench Binary",
+      "description": "Check nixlbench binary exists",
+      "commands": [
+        "if command -v nixlbench >/dev/null 2>&1; then echo '[OK] nixlbench found in PATH'; elif [ -f ${NIXL_PATH}/benchmark/nixlbench/nixlbench ]; then echo '[OK] nixlbench found at ${NIXL_PATH}/benchmark/nixlbench/nixlbench'; else echo '[ERROR] nixlbench not found'; exit 1; fi"
+      ]
+    },
+    {
+      "id": "03-verify-gpu",
+      "name": "Verify GPU Access",
+      "description": "Ensure GPU is available for VRAM allocation",
+      "commands": [
+        "nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader",
+        "echo '[OK] GPU available'"
+      ]
+    },
+    {
+      "id": "04-run-nixlbench-initiator",
+      "name": "Run NIXLBench Initiator ({{ backend }}, {{ message_size_human }}, {{ scheme }})",
+      "description": "Execute NIXLBench as initiator role",
+      "commands": [
+        "NIXLBENCH_BIN=$(command -v nixlbench 2>/dev/null || echo '${NIXL_PATH}/benchmark/nixlbench/nixlbench')",
+{% if backend == 'Libfabric' %}
+        "export FI_PROVIDER=efa",
+        "export FI_EFA_USE_DEVICE_RDMA=1",
+        "export FI_EFA_FORK_SAFE=1",
+{% endif %}
+        "echo '[INFO] Running NIXLBench initiator: backend={{ backend }}, size={{ message_size }}, scheme={{ scheme }}, threads={{ num_threads }}'",
+        "RAW_OUTPUT=$(timeout 600 $NIXLBENCH_BIN --etcd_endpoints ${ETCD_ENDPOINT} --backend {{ backend }} --initiator_seg_type {{ initiator_seg_type }} --target_seg_type {{ target_seg_type }} --message_size {{ message_size }} --num_threads {{ num_threads }} --scheme {{ scheme }} --iterations {{ iterations }} --role initiator 2>&1) || { echo '[WARNING] NIXLBench initiator timed out or failed (exit=$?)'; }",
+        "echo \"$RAW_OUTPUT\"",
+        "echo \"$RAW_OUTPUT\" > ${OUTPUT_DIR}/{{ pattern_id }}_raw.log",
+        "python3 -c \"",
+        "import json, re",
+        "from datetime import datetime, timezone",
+        "with open('${OUTPUT_DIR}/{{ pattern_id }}_raw.log') as f:",
+        "    raw = f.read()",
+        "result = {",
+        "    'tool': 'nixlbench',",
+        "    'pattern_id': '{{ pattern_id }}',",
+        "    'backend': '{{ backend }}',",
+        "    'initiator_seg_type': '{{ initiator_seg_type }}',",
+        "    'target_seg_type': '{{ target_seg_type }}',",
+        "    'message_size': {{ message_size }},",
+        "    'message_size_human': '{{ message_size_human }}',",
+        "    'num_threads': {{ num_threads }},",
+        "    'scheme': '{{ scheme }}',",
+        "    'iterations': {{ iterations }},",
+        "    'timestamp': datetime.now(timezone.utc).isoformat(),",
+        "    'raw_output': raw,",
+        "}",
+        "lines = raw.strip().split('\\n')",
+        "for line in lines:",
+        "    if 'p50' in line.lower():",
+        "        m = re.search(r':\\s*([\\d.]+)', line)",
+        "        if m: result['latency_p50_us'] = float(m.group(1))",
+        "    if 'p95' in line.lower():",
+        "        m = re.search(r':\\s*([\\d.]+)', line)",
+        "        if m: result['latency_p95_us'] = float(m.group(1))",
+        "    if 'p99' in line.lower():",
+        "        m = re.search(r':\\s*([\\d.]+)', line)",
+        "        if m: result['latency_p99_us'] = float(m.group(1))",
+        "    if 'bandwidth' in line.lower() or 'throughput' in line.lower():",
+        "        m = re.search(r'([\\d.]+)\\s*(GB/s|MB/s)', line)",
+        "        if m:",
+        "            bw = float(m.group(1))",
+        "            if m.group(2) == 'MB/s': bw /= 1000",
+        "            result['bandwidth_gbps'] = bw",
+        "if 'latency_p50_us' in result:",
+        "    transfer_ms = result['latency_p50_us'] / 1000",
+        "    result['transfer_time_ms'] = transfer_ms",
+        "with open('${OUTPUT_FILE}', 'w') as f:",
+        "    json.dump(result, f, indent=2)",
+        "print('[OK] Results parsed and saved')",
+        "\""
+      ]
+    },
+    {
+      "id": "05-collect-results",
+      "name": "Collect Results",
+      "description": "Display measurement results",
+      "commands": [
+        "echo '--- NIXLBench Results ---'",
+        "cat ${OUTPUT_FILE} 2>/dev/null | python3 -m json.tool || echo '[INFO] Results file not found'",
+        "echo '--- End Results ---'"
+      ]
+    }
+  ]
+}

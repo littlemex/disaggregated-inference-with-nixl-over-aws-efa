@@ -1,6 +1,6 @@
 {
-  "name": "Low-Level: {{ tool }} {{ provider|upper }} - {{ message_sizes|join(', ') }}",
-  "description": "EFA basic latency measurement using {{ tool }} with provider={{ provider }}",
+  "name": "Low-Level: {{ tool }} {{ provider|upper }} Client - {{ message_sizes|join(', ') }}",
+  "description": "EFA basic latency measurement client using {{ tool }} with provider={{ provider }}",
   "variables": {
     "OUTPUT_DIR": "/tmp/low-level-results",
     "OUTPUT_FILE": "/tmp/low-level-results/{{ pattern_id }}.json",
@@ -27,34 +27,29 @@
       ]
     },
     {
-      "id": "03-run-measurement",
-      "name": "Run {{ tool }} Measurement ({{ message_sizes|length }} sizes)",
-      "description": "Run {{ tool }} server+client pairs for each message size sequentially",
+      "id": "03-run-client",
+      "name": "Run {{ tool }} Client ({{ message_sizes|length }} sizes)",
+      "description": "Run {{ tool }} client connecting to server on NODE1, measure latency/bandwidth",
       "commands": [
         "if [ -z \"$NODE1_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE not set'; exit 1; fi",
         "RESULTS_JSON='{\"tool\": \"{{ tool }}\", \"provider\": \"{{ provider }}\", \"pattern_id\": \"{{ pattern_id }}\", \"timestamp\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\", \"results\": ['",
         "FIRST=true",
 {% for size in message_sizes %}
         "echo '[INFO] === Message size: {{ size }} ({{ loop.index }}/{{ message_sizes|length }}) ==='",
-        "echo '[INFO] Starting server for size {{ size }}...'",
-        "timeout 60 {{ tool }} -p {{ provider }}{% if size != 'default' %} -S {{ size }}{% endif %} -I {{ iterations }} > {% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_server_{{ size }}.log 2>&1 &",
-        "SERVER_PID=$!",
-        "sleep 3",
         "echo '[INFO] Running client for size {{ size }}...'",
         "RAW_OUTPUT=$(timeout 120 {{ tool }} -p {{ provider }}{% if size != 'default' %} -S {{ size }}{% endif %} -I {{ iterations }} $NODE1_PRIVATE 2>&1) || true",
         "echo \"$RAW_OUTPUT\"",
-        "wait $SERVER_PID 2>/dev/null || true",
         "LATENCY=$(echo \"$RAW_OUTPUT\" | grep -E '^[0-9]' | tail -1 | awk '{print $NF}' || echo '0')",
         "BANDWIDTH=$(echo \"$RAW_OUTPUT\" | grep -E '^[0-9]' | tail -1 | awk '{print $(NF-1)}' || echo '0')",
         "if [ \"$FIRST\" = \"true\" ]; then FIRST=false; else RESULTS_JSON=\"$RESULTS_JSON,\"; fi",
         "RESULTS_JSON=\"$RESULTS_JSON{\\\"message_size\\\": \\\"{{ size }}\\\", \\\"latency_us\\\": ${LATENCY:-0}, \\\"bandwidth_mbps\\\": ${BANDWIDTH:-0}}\"",
         "echo '[OK] Size {{ size }} complete'",
-        "sleep 1",
+        "sleep 2",
 {% endfor %}
         "RESULTS_JSON=\"$RESULTS_JSON]}\"",
-        "echo \"$RESULTS_JSON\" | python3 -m json.tool > {% raw %}{{OUTPUT_FILE}}{% endraw %}",
-        "echo '[OK] Results saved to {% raw %}{{OUTPUT_FILE}}{% endraw %}'",
-        "cat {% raw %}{{OUTPUT_FILE}}{% endraw %}"
+        "echo \"$RESULTS_JSON\" | python3 -m json.tool > {% raw %}${OUTPUT_FILE}{% endraw %}",
+        "echo '[OK] Results saved to {% raw %}${OUTPUT_FILE}{% endraw %}'",
+        "cat {% raw %}${OUTPUT_FILE}{% endraw %}"
       ]
     },
     {
@@ -63,7 +58,7 @@
       "description": "Display measurement results",
       "commands": [
         "echo '--- {{ tool }} Results ---'",
-        "cat {% raw %}{{OUTPUT_FILE}}{% endraw %} 2>/dev/null || echo '[INFO] Results file not found'",
+        "cat {% raw %}${OUTPUT_FILE}{% endraw %} 2>/dev/null || echo '[INFO] Results file not found'",
         "echo '--- End Results ---'"
       ]
     }

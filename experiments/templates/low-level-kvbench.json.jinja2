@@ -1,0 +1,147 @@
+{
+  "name": "Low-Level: KVBench {{ backend }} - {{ model_config }} - {{ prompt_tokens }} tokens",
+  "description": "KV-Cache transfer profiling: model={{ model_config }}, backend={{ backend }}, prompt_tokens={{ prompt_tokens }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results",
+    "OUTPUT_FILE": "/tmp/low-level-results/{{ pattern_id }}.json",
+    "ETCD_ENDPOINT": "http://{% raw %}{{NODE1_PRIVATE}}{% endraw %}:{{ infrastructure.etcd_port }}",
+    "NIXL_PATH": "{{ infrastructure.nixl_path }}",
+    "KVBENCH_PATH": "{{ infrastructure.nixl_path }}/benchmark/kvbench",
+    "NODE1_PRIVATE": "{% raw %}{{NODE1_PRIVATE}}{% endraw %}"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-verify-etcd",
+      "name": "Verify ETCD Server",
+      "description": "Ensure ETCD is running (should be started by NIXLBench layer)",
+      "commands": [
+        "curl -s http://localhost:{{ infrastructure.etcd_port }}/health | grep -q 'true' && echo '[OK] ETCD running' || { echo '[ERROR] ETCD not running. Start it first (run NIXLBench layer L1).'; exit 1; }"
+      ]
+    },
+    {
+      "id": "03-verify-kvbench",
+      "name": "Verify KVBench Installation",
+      "description": "Check KVBench is installed and model config exists",
+      "commands": [
+        "if [ ! -d {% raw %}{{KVBENCH_PATH}}{% endraw %} ]; then echo '[ERROR] KVBench not found at {% raw %}{{KVBENCH_PATH}}{% endraw %}'; exit 1; fi",
+        "echo '[OK] KVBench directory found'"
+      ]
+    },
+    {
+      "id": "04-create-model-config",
+      "name": "Create Model Config for {{ model_config }}",
+      "description": "Create YAML config for Qwen2.5-7B KV-Cache parameters",
+      "skip_if": "test -f /tmp/low-level-results/{{ model_config }}.yaml",
+      "commands": [
+        "cat > /tmp/low-level-results/{{ model_config }}.yaml << 'MODELEOF'",
+        "model_name: Qwen/Qwen2.5-7B-Instruct",
+        "num_layers: 28",
+        "num_kv_heads: 4",
+        "head_dim: 128",
+        "dtype: bf16",
+        "MODELEOF",
+        "echo '[OK] Model config created'"
+      ]
+    },
+    {
+      "id": "05-run-kvcache-analysis",
+      "name": "KV-Cache Size Analysis",
+      "description": "Analyze KV-Cache structure for {{ model_config }} at {{ prompt_tokens }} tokens",
+      "commands": [
+        "cd {% raw %}{{KVBENCH_PATH}}{% endraw %}",
+        "source venv/bin/activate 2>/dev/null || { python3 -m venv venv && source venv/bin/activate && pip install uv && uv sync --active; }",
+        "python main.py kvcache --model /tmp/low-level-results/{{ model_config }}.yaml 2>&1 | tee {% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_kvcache.log",
+        "echo '[OK] KV-Cache analysis complete'"
+      ]
+    },
+    {
+      "id": "06-run-transfer-plan",
+      "name": "Generate Transfer Plan",
+      "description": "Generate optimal transfer plan for {{ backend }} backend",
+      "commands": [
+        "cd {% raw %}{{KVBENCH_PATH}}{% endraw %}",
+        "source venv/bin/activate",
+        "python main.py plan --model /tmp/low-level-results/{{ model_config }}.yaml --backend {{ backend }} 2>&1 | tee {% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_plan.log",
+        "echo '[OK] Transfer plan generated'"
+      ]
+    },
+    {
+      "id": "07-run-profile",
+      "name": "Run KVBench Profile ({{ backend }}, {{ prompt_tokens }} tokens)",
+      "description": "Profile KV-Cache transfer with {{ backend }} backend",
+      "commands": [
+        "cd {% raw %}{{KVBENCH_PATH}}{% endraw %}",
+        "source venv/bin/activate",
+{% if backend == 'Libfabric' %}
+        "export FI_PROVIDER=efa",
+        "export FI_EFA_USE_DEVICE_RDMA=1",
+        "export FI_EFA_FORK_SAFE=1",
+{% endif %}
+        "echo '[INFO] Profiling KV-Cache transfer: model={{ model_config }}, backend={{ backend }}, tokens={{ prompt_tokens }}'",
+        "RAW_OUTPUT=$(timeout 900 python main.py profile --model /tmp/low-level-results/{{ model_config }}.yaml --backend {{ backend }} --prompt_length {{ prompt_tokens }} --etcd_endpoints {% raw %}{{ETCD_ENDPOINT}}{% endraw %} 2>&1) || { echo '[WARNING] KVBench profile timed out or failed (exit=$?)'; }",
+        "echo \"$RAW_OUTPUT\"",
+        "echo \"$RAW_OUTPUT\" > {% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_raw.log",
+        "python3 -c \"",
+        "import json, re",
+        "with open('{% raw %}{{OUTPUT_DIR}}{% endraw %}/{{ pattern_id }}_raw.log') as f:",
+        "    raw = f.read()",
+        "result = {",
+        "    'tool': 'kvbench',",
+        "    'pattern_id': '{{ pattern_id }}',",
+        "    'backend': '{{ backend }}',",
+        "    'model_config': '{{ model_config }}',",
+        "    'prompt_tokens': {{ prompt_tokens }},",
+        "    'action': '{{ action }}',",
+        "    'model_params': {",
+        "        'num_layers': 28,",
+        "        'num_kv_heads': 4,",
+        "        'head_dim': 128,",
+        "        'dtype': 'bf16',",
+        "        'bytes_per_token': 57344",
+        "    },",
+        "    'kv_cache_size_bytes': {{ prompt_tokens }} * 57344,",
+        "    'raw_output': raw,",
+        "}",
+        "lines = raw.strip().split('\\n')",
+        "for line in lines:",
+        "    if 'transfer' in line.lower() and ('time' in line.lower() or 'latency' in line.lower()):",
+        "        m = re.search(r':\\s*([\\d.]+)\\s*(ms|us|s)', line)",
+        "        if m:",
+        "            val = float(m.group(1))",
+        "            unit = m.group(2)",
+        "            if unit == 'us': val /= 1000",
+        "            elif unit == 's': val *= 1000",
+        "            result['kv_transfer_time_ms'] = val",
+        "    if 'bandwidth' in line.lower() or 'throughput' in line.lower():",
+        "        m = re.search(r'([\\d.]+)\\s*(GB/s|MB/s)', line)",
+        "        if m:",
+        "            bw = float(m.group(1))",
+        "            if m.group(2) == 'MB/s': bw /= 1000",
+        "            result['bandwidth_gbps'] = bw",
+        "with open('{% raw %}{{OUTPUT_FILE}}{% endraw %}', 'w') as f:",
+        "    json.dump(result, f, indent=2)",
+        "print('[OK] KVBench results parsed and saved')",
+        "\""
+      ]
+    },
+    {
+      "id": "08-collect-results",
+      "name": "Collect Results",
+      "description": "Display profiling results",
+      "commands": [
+        "echo '--- KVBench Results ---'",
+        "cat {% raw %}{{OUTPUT_FILE}}{% endraw %} 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(f\"  {k}: {v}\") for k,v in d.items() if k != \"raw_output\"]' || echo '[INFO] Results file not found'",
+        "echo '--- End Results ---'"
+      ]
+    }
+  ]
+}

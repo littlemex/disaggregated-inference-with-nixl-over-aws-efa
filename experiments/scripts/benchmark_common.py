@@ -396,9 +396,7 @@ async def measure_streaming(
             "tpot_ms": tpot * 1000,
             "avg_itl_ms": (statistics.mean(itls) * 1000) if itls else 0,
             "median_itl_ms": (statistics.median(itls) * 1000) if itls else 0,
-            "p95_itl_ms": (
-                sorted(itls)[int(len(itls) * 0.95)] * 1000
-            ) if len(itls) > 1 else 0,
+            "p95_itl_ms": compute_percentiles([x * 1000 for x in itls]).get("p95", 0) if itls else 0,
             "completion_tokens": len(tokens),
             "throughput_tok_per_sec": (
                 len(tokens) / e2e_latency if e2e_latency > 0 else 0

@@ -1,0 +1,66 @@
+{
+  "name": "Low-Level: NIXLBench {{ backend }} Server - {{ message_size_human }} - {{ scheme }} t={{ num_threads }}",
+  "description": "NIXL VRAM-to-VRAM transfer measurement (target): backend={{ backend }}, size={{ message_size }}, scheme={{ scheme }}, threads={{ num_threads }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results",
+    "ETCD_ENDPOINT": "http://{% raw %}{{NODE1_PRIVATE}}{% endraw %}:{{ infrastructure.etcd_port }}",
+    "NIXL_PATH": "{{ infrastructure.nixl_path }}",
+    "NODE1_PRIVATE": "{% raw %}{{NODE1_PRIVATE}}{% endraw %}"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-start-etcd",
+      "name": "Start ETCD Server",
+      "description": "Start ETCD server in Docker container (idempotent)",
+      "skip_if": "docker ps --filter name=etcd-nixlbench --format '{% raw %}{{.Names}}{% endraw %}' | grep -q etcd-nixlbench",
+      "commands": [
+        "docker rm -f etcd-nixlbench 2>/dev/null || true",
+        "docker run -d --name etcd-nixlbench --network host quay.io/coreos/etcd:{{ infrastructure.etcd_version }} /usr/local/bin/etcd --listen-client-urls=http://0.0.0.0:{{ infrastructure.etcd_port }} --advertise-client-urls=http://0.0.0.0:{{ infrastructure.etcd_port }}",
+        "sleep 3",
+        "curl -s http://localhost:{{ infrastructure.etcd_port }}/health | grep -q 'true' && echo '[OK] ETCD server running' || { echo '[ERROR] ETCD failed to start'; exit 1; }"
+      ]
+    },
+    {
+      "id": "03-verify-nixlbench",
+      "name": "Verify NIXLBench Binary",
+      "description": "Check nixlbench binary exists",
+      "commands": [
+        "if command -v nixlbench >/dev/null 2>&1; then echo '[OK] nixlbench found in PATH'; elif [ -f ${NIXL_PATH}/benchmark/nixlbench/nixlbench ]; then echo '[OK] nixlbench found at ${NIXL_PATH}/benchmark/nixlbench/nixlbench'; else echo '[ERROR] nixlbench not found'; exit 1; fi"
+      ]
+    },
+    {
+      "id": "04-verify-gpu",
+      "name": "Verify GPU Access",
+      "description": "Ensure GPU is available for VRAM allocation",
+      "commands": [
+        "nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader",
+        "echo '[OK] GPU available'"
+      ]
+    },
+    {
+      "id": "05-run-nixlbench-target",
+      "name": "Run NIXLBench Target ({{ backend }}, {{ message_size_human }}, {{ scheme }})",
+      "description": "Execute NIXLBench as target role (waits for initiator to connect)",
+      "commands": [
+        "NIXLBENCH_BIN=$(command -v nixlbench 2>/dev/null || echo '${NIXL_PATH}/benchmark/nixlbench/nixlbench')",
+{% if backend == 'Libfabric' %}
+        "export FI_PROVIDER=efa",
+        "export FI_EFA_USE_DEVICE_RDMA=1",
+        "export FI_EFA_FORK_SAFE=1",
+{% endif %}
+        "echo '[INFO] Running NIXLBench target: backend={{ backend }}, size={{ message_size }}, scheme={{ scheme }}, threads={{ num_threads }}'",
+        "timeout 900 $NIXLBENCH_BIN --etcd_endpoints ${ETCD_ENDPOINT} --backend {{ backend }} --initiator_seg_type {{ initiator_seg_type }} --target_seg_type {{ target_seg_type }} --message_size {{ message_size }} --num_threads {{ num_threads }} --scheme {{ scheme }} --iterations {{ iterations }} --role target 2>&1 | tee ${OUTPUT_DIR}/{{ pattern_id }}_server_raw.log || { echo '[WARNING] NIXLBench target timed out or failed (exit=$?)'; }",
+        "echo '[OK] NIXLBench target completed'"
+      ]
+    }
+  ]
+}

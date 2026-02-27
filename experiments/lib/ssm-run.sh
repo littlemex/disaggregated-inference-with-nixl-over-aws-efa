@@ -27,19 +27,19 @@ ssm_run_command() {
 
     log "Running commands on instance: $instance_id"
 
-    # JSON 配列を構築
-    local json_commands="["
-    for cmd in "${commands[@]}"; do
-        json_commands+="\"$cmd\","
-    done
-    json_commands="${json_commands%,}]"  # 最後のカンマを削除
+    # jq を使用して安全に JSON 配列を構築（インジェクション防止）
+    local json_commands
+    json_commands=$(printf '%s\n' "${commands[@]}" | jq -R . | jq -s '.')
+
+    local parameters_json
+    parameters_json=$(jq -n --argjson cmds "$json_commands" '{"commands": $cmds}')
 
     # send-command を実行
     local command_id
     command_id=$(aws ssm send-command \
         --instance-ids "$instance_id" \
         --document-name "AWS-RunShellScript" \
-        --parameters "{\"commands\":$json_commands}" \
+        --parameters "$parameters_json" \
         --timeout-seconds 3600 \
         --output-s3-bucket-name "$SCRIPTS_BUCKET" \
         --output-s3-key-prefix "command-output/" \
