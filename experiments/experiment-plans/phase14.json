@@ -1,0 +1,119 @@
+{
+  "phase": 14,
+  "name": "Extended EFA Effect Validation",
+  "description": "Statistical DOE-based comprehensive validation of EFA vs TCP KV-Cache transfer performance on g5.12xlarge",
+  "infrastructure": {
+    "instance_type": "g5.12xlarge",
+    "node_count": 2,
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "vllm_version": "v0.15.1",
+    "venv_path": "/opt/dlami/nvme/venv/vllm-0.16",
+    "gpu_count_per_node": 4
+  },
+  "common_settings": {
+    "max_tokens": 100,
+    "warmup_iterations": 20,
+    "measurement_iterations": 30,
+    "gpu_memory_utilization": 0.9,
+    "max_num_batched_tokens": 4096,
+    "prefix_cache": false,
+    "measurement_type": "online"
+  },
+  "layers": [
+    {
+      "id": "L0",
+      "name": "Token Sweep",
+      "priority": "P0",
+      "description": "Prompt token length (KV-Cache size) vs TTFT relationship",
+      "statistical_rationale": "Unified: all 8 points for linearity. TCP/EFA: endpoints + midpoints (5 each). 20K as extreme point.",
+      "patterns": [
+        {"id": "p14-unified-1k", "backend": "unified", "prompt_tokens": 1000, "concurrency": 1},
+        {"id": "p14-unified-2k", "backend": "unified", "prompt_tokens": 2000, "concurrency": 1},
+        {"id": "p14-unified-3k", "backend": "unified", "prompt_tokens": 3000, "concurrency": 1},
+        {"id": "p14-unified-4k", "backend": "unified", "prompt_tokens": 4000, "concurrency": 1},
+        {"id": "p14-unified-6k", "backend": "unified", "prompt_tokens": 6000, "concurrency": 1},
+        {"id": "p14-unified-8k", "backend": "unified", "prompt_tokens": 8000, "concurrency": 1},
+        {"id": "p14-unified-10k", "backend": "unified", "prompt_tokens": 10000, "concurrency": 1},
+        {"id": "p14-unified-12k", "backend": "unified", "prompt_tokens": 12000, "concurrency": 1},
+        {"id": "p14-tcp-1k", "backend": "tcp", "prompt_tokens": 1000, "concurrency": 1},
+        {"id": "p14-tcp-2k", "backend": "tcp", "prompt_tokens": 2000, "concurrency": 1},
+        {"id": "p14-tcp-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 1},
+        {"id": "p14-tcp-8k", "backend": "tcp", "prompt_tokens": 8000, "concurrency": 1},
+        {"id": "p14-tcp-12k", "backend": "tcp", "prompt_tokens": 12000, "concurrency": 1},
+        {"id": "p14-efa-1k", "backend": "efa", "prompt_tokens": 1000, "concurrency": 1},
+        {"id": "p14-efa-2k", "backend": "efa", "prompt_tokens": 2000, "concurrency": 1},
+        {"id": "p14-efa-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1},
+        {"id": "p14-efa-8k", "backend": "efa", "prompt_tokens": 8000, "concurrency": 1},
+        {"id": "p14-efa-12k", "backend": "efa", "prompt_tokens": 12000, "concurrency": 1},
+        {"id": "p14-efa-20k", "backend": "efa", "prompt_tokens": 20000, "concurrency": 1}
+      ]
+    },
+    {
+      "id": "L1",
+      "name": "Concurrency Sweep",
+      "priority": "P0",
+      "description": "Scalability and bandwidth contention under concurrent requests",
+      "statistical_rationale": "All concurrency levels at 1K (main effect). Long prompt (4K) at c4/c8 only (interaction). c16x12K extreme point.",
+      "patterns": [
+        {"id": "p14-unified-c1-1k", "backend": "unified", "prompt_tokens": 1000, "concurrency": 1},
+        {"id": "p14-unified-c2-1k", "backend": "unified", "prompt_tokens": 1000, "concurrency": 2},
+        {"id": "p14-unified-c4-1k", "backend": "unified", "prompt_tokens": 1000, "concurrency": 4},
+        {"id": "p14-unified-c8-1k", "backend": "unified", "prompt_tokens": 1000, "concurrency": 8},
+        {"id": "p14-unified-c16-1k", "backend": "unified", "prompt_tokens": 1000, "concurrency": 16},
+        {"id": "p14-tcp-c1-1k", "backend": "tcp", "prompt_tokens": 1000, "concurrency": 1},
+        {"id": "p14-tcp-c2-1k", "backend": "tcp", "prompt_tokens": 1000, "concurrency": 2},
+        {"id": "p14-tcp-c4-1k", "backend": "tcp", "prompt_tokens": 1000, "concurrency": 4},
+        {"id": "p14-tcp-c8-1k", "backend": "tcp", "prompt_tokens": 1000, "concurrency": 8},
+        {"id": "p14-tcp-c16-1k", "backend": "tcp", "prompt_tokens": 1000, "concurrency": 16},
+        {"id": "p14-efa-c1-1k", "backend": "efa", "prompt_tokens": 1000, "concurrency": 1},
+        {"id": "p14-efa-c2-1k", "backend": "efa", "prompt_tokens": 1000, "concurrency": 2},
+        {"id": "p14-efa-c4-1k", "backend": "efa", "prompt_tokens": 1000, "concurrency": 4},
+        {"id": "p14-efa-c8-1k", "backend": "efa", "prompt_tokens": 1000, "concurrency": 8},
+        {"id": "p14-efa-c16-1k", "backend": "efa", "prompt_tokens": 1000, "concurrency": 16},
+        {"id": "p14-tcp-c4-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 4},
+        {"id": "p14-tcp-c8-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 8},
+        {"id": "p14-efa-c4-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 4},
+        {"id": "p14-efa-c8-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 8},
+        {"id": "p14-efa-c16-12k", "backend": "efa", "prompt_tokens": 12000, "concurrency": 16}
+      ]
+    },
+    {
+      "id": "L2",
+      "name": "vLLM Configuration Impact",
+      "priority": "P1",
+      "description": "Impact of gpu_memory_utilization and max_num_batched_tokens on TTFT",
+      "statistical_rationale": "EFA parameter sweep (main effect). TCP/Unified representative points only (interaction with backend).",
+      "patterns": [
+        {"id": "p14-efa-gpu03-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.3},
+        {"id": "p14-efa-gpu05-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.5},
+        {"id": "p14-efa-gpu08-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8},
+        {"id": "p14-efa-gpu08-batch2k-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 2048},
+        {"id": "p14-efa-gpu08-batch8k-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 8192},
+        {"id": "p14-efa-gpu08-batch8k-12k", "backend": "efa", "prompt_tokens": 12000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 8192},
+        {"id": "p14-tcp-gpu08-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8},
+        {"id": "p14-tcp-gpu08-batch2k-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 2048},
+        {"id": "p14-tcp-gpu08-batch8k-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 8192},
+        {"id": "p14-unified-gpu08-4k", "backend": "unified", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8},
+        {"id": "p14-unified-gpu08-batch2k-4k", "backend": "unified", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 2048},
+        {"id": "p14-unified-gpu08-batch8k-4k", "backend": "unified", "prompt_tokens": 4000, "concurrency": 1, "gpu_memory_utilization": 0.8, "max_num_batched_tokens": 8192}
+      ]
+    },
+    {
+      "id": "L3",
+      "name": "Online vs Offline Measurement",
+      "priority": "P2",
+      "description": "Quantify HTTP overhead by comparing online/offline measurement",
+      "statistical_rationale": "Online/Offline delta = HTTP overhead. All backends at 4K. EFA at 12K for max effect.",
+      "patterns": [
+        {"id": "p14-unified-online-4k", "backend": "unified", "prompt_tokens": 4000, "concurrency": 1, "measurement_type": "online"},
+        {"id": "p14-unified-offline-4k", "backend": "unified", "prompt_tokens": 4000, "concurrency": 1, "measurement_type": "offline"},
+        {"id": "p14-tcp-online-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 1, "measurement_type": "online"},
+        {"id": "p14-tcp-offline-4k", "backend": "tcp", "prompt_tokens": 4000, "concurrency": 1, "measurement_type": "offline"},
+        {"id": "p14-efa-online-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "measurement_type": "online"},
+        {"id": "p14-efa-offline-4k", "backend": "efa", "prompt_tokens": 4000, "concurrency": 1, "measurement_type": "offline"},
+        {"id": "p14-efa-online-12k", "backend": "efa", "prompt_tokens": 12000, "concurrency": 1, "measurement_type": "online"},
+        {"id": "p14-efa-offline-12k", "backend": "efa", "prompt_tokens": 12000, "concurrency": 1, "measurement_type": "offline"}
+      ]
+    }
+  ]
+}

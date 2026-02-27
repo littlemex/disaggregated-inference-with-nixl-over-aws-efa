@@ -209,8 +209,9 @@ export class NixlEfaStack extends Stack {
       ],
     });
 
-    // Grant S3 read access to scripts bucket
-    this.scriptsBucket.grantRead(ec2Role);
+    // Grant S3 read/write access to scripts bucket
+    // Write access is needed for uploading experiment results from EC2 instances
+    this.scriptsBucket.grantReadWrite(ec2Role);
 
     // CloudWatch Logs access for SSM session logging
     ec2Role.addToPolicy(
@@ -447,7 +448,7 @@ export class NixlEfaStack extends Stack {
 
     new CfnOutput(this, "ScriptsBucketName", {
       value: this.scriptsBucket.bucketName,
-      description: "S3 bucket for deployment scripts",
+      description: "S3 bucket for scripts and task definitions",
       exportName: `${this.stackName}-ScriptsBucketName`,
     });
 

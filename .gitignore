@@ -40,3 +40,13 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Experiments: auto-generated task definitions (regenerated from experiment plans)
+experiments/task-definitions/phase*/
+
+# Experiments: measurement results (tracked in MLflow, not in git)
+experiments/results/phase*/
+
+# Experiments: temporary files
+experiments/*.log
+experiments/tmp/

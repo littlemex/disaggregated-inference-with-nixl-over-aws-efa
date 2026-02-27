@@ -44,8 +44,8 @@ graph TB
             N1 <==>|EFA| N2
         end
 
-        N1 -.->|Presigned URL<br/>IAM で発行| MLflow
-        N2 -.->|Presigned URL<br/>IAM で発行| MLflow
+        N1 -.->|SigV4 認証<br/>ARN ベース| MLflow
+        N2 -.->|SigV4 認証<br/>ARN ベース| MLflow
     end
 
     style MLflow fill: #e1f5ff
@@ -195,7 +195,7 @@ npx cdk deploy --all \
 
 ```
 Outputs:
-MlflowTrackingServerStack.TrackingServerArn = arn: aws: sagemaker: us-east-1:123456789012: mlflow-tracking-server/nixl-efa-mlflow
+MlflowTrackingServerStack.TrackingServerArn = arn:aws:sagemaker:us-east-1:123456789012:mlflow-tracking-server/nixl-efa-mlflow
 NixlEfaStack.Node1PublicIp = 3.80.45.55
 NixlEfaStack.Node2PublicIp = 18.232.147.93
 NixlEfaStack.Node1PrivateIp = 172.31.27.100
@@ -204,14 +204,48 @@ NixlEfaStack.Node2PrivateIp = 172.31.27.101
 
 **重要**: `TrackingServerArn` の値は後で使用するため、控えておいてください。プライベート IP アドレスはお使いの VPC 設定により異なります。
 
-### 8. インスタンスへの接続
+### 8. デプロイ情報の取得
+
+デプロイ完了後、インスタンス ID と IP アドレスを取得します。
+
+```bash
+# Node1 のインスタンス ID を取得
+NODE1_ID=$(aws ec2 describe-instances \
+  --region us-east-1 \
+  --filters "Name=tag:Name,Values=nixl-node1" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' \
+  --output text)
+
+# Node2 のインスタンス ID を取得
+NODE2_ID=$(aws ec2 describe-instances \
+  --region us-east-1 \
+  --filters "Name=tag:Name,Values=nixl-node2" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' \
+  --output text)
+
+# Node2 のプライベート IP を取得
+NODE2_PRIVATE_IP=$(aws ec2 describe-instances \
+  --region us-east-1 \
+  --filters "Name=tag:Name,Values=nixl-node2" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+  --output text)
+
+# 情報を表示
+echo "Node1 Instance ID: $NODE1_ID"
+echo "Node2 Instance ID: $NODE2_ID"
+echo "Node2 Private IP: $NODE2_PRIVATE_IP"
+```
+
+これらの値を後の手順で使用します。
+
+### 9. インスタンスへの接続
 
 SSM Session Manager でインスタンスに接続します。
 
 ```bash
 # Node 1 のインスタンス ID をタグから取得
 NODE1_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag: Name,Values=nixl-node1" "Name=instance-state-name,Values=running" \
+  --filters "Name=tag:Name,Values=nixl-node1" "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' \
   --output text)
 
@@ -236,7 +270,7 @@ bash
 
 セッションを終了するには `exit` を 2 回入力します（1 回目で bash を終了、2 回目で SSM セッションを終了）。
 
-### 9. 環境変数の設定
+### 9b. 環境変数の設定
 
 CDK デプロイ時に User Data で `/etc/environment` に `MLFLOW_TRACKING_ARN` が書き込まれます。SSM Session Manager 経由ではログインシェルのプロファイルが実行されないため、環境変数を手動で読み込む必要があります。
 
@@ -293,7 +327,7 @@ Node 2 でも同様に環境を確認します。
 ```bash
 # ローカルから Node 2 に接続
 NODE2_ID=$(aws ec2 describe-instances \
-  --filters "Name=tag: Name,Values=nixl-node2" "Name=instance-state-name,Values=running" \
+  --filters "Name=tag:Name,Values=nixl-node2" "Name=instance-state-name,Values=running" \
   --query 'Reservations[0].Instances[0].InstanceId' \
   --output text)
 
@@ -321,16 +355,121 @@ chmod +x check-environment.sh
 
 **補足**: 環境変数名 `NODE2_PRIVATE_IP` は、スクリプト内でピア (peer) ノードの IP を指定するために使用されます。Node 2 から実行する場合、ピアは Node 1 となるため、Node 1 のプライベート IP を設定してください。
 
-### 11. MLflow 接続テスト
+### 11. NCCL 通信ベンチマーク
 
-MLflow への接続を確認します。Deep Learning AMI には mlflow がプリインストールされていないため、手動でインストールします。
+EFA の実効性能を確認するため、NCCL 通信ベンチマークを実行します。
+
+#### 11.1. NCCL tests のセットアップ
+
+Node 1 で NCCL tests をインストールします。
 
 ```bash
 # インスタンス上で実行
 cd /tmp/disaggregated-inference-with-nixl-over-aws-efa/scripts
 
-# MLflow パッケージをユーザー領域にインストール
-pip install --user mlflow
+# NCCL tests のセットアップ（初回のみ）
+sudo bash setup-nccl-tests.sh
+```
+
+このスクリプトは、まず依存パッケージ（build-essential, libopenmpi-dev など）をインストールした後、NCCL コアライブラリ（libnccl2, libnccl-dev）を追加します。次に NVIDIA の公式リポジトリから NCCL tests をクローンし、MPI サポートを有効にしてビルドします。インストールが完了すると、`/opt/nccl-tests/build/` 配下に各種ベンチマークツールが生成されます。
+
+#### 11.2. ベンチマークの実行
+
+```bash
+# Node 1 で実行
+bash nccl-benchmark.sh
+```
+
+デフォルトでは、**all_reduce**（すべての GPU でデータを集約し、結果を全 GPU に配布する操作）と **all_gather**（すべての GPU からデータを収集し、全 GPU に配布する操作）の 2 つの NCCL collective operation を測定します。
+
+測定パラメータ（カスタマイズ可能）：
+
+```bash
+# GPU 数を指定
+NUM_GPUS=2 bash nccl-benchmark.sh
+
+# データサイズ範囲を指定
+MIN_SIZE=1M MAX_SIZE=64M bash nccl-benchmark.sh
+
+# ステップファクターを指定
+STEP_FACTOR=4 bash nccl-benchmark.sh
+```
+
+#### 11.3. 測定結果
+
+今回の環境（g5.12xlarge、4x NVIDIA A10G、TCP モード）での測定結果：
+
+**All-Reduce ベンチマーク**:
+
+| データサイズ | 時間 (μs) | Alg BW (GB/s) | Bus BW (GB/s) |
+|--------------|-----------|---------------|---------------|
+| 8 B          | 51.52     | 0.00          | 0.00          |
+| 128 MB       | 65240.6   | 2.06          | 3.09          |
+| 平均         | -         | -             | **1.47**      |
+
+**All-Gather ベンチマーク**:
+
+| データサイズ | 時間 (μs) | Alg BW (GB/s) | Bus BW (GB/s) |
+|--------------|-----------|---------------|---------------|
+| 64 B         | 29.98     | 0.00          | 0.00          |
+| 128 MB       | 33139.1   | 4.05          | 3.04          |
+| 平均         | -         | -             | **1.37**      |
+
+**測定結果の詳細**:
+
+```
+[all_reduce]
+   134217728 bytes (128 MB):  65240.6 μs,  2.06 GB/s (Alg BW),  3.09 GB/s (Bus BW)
+    67108864 bytes (64 MB):   31157.6 μs,  2.15 GB/s (Alg BW),  3.23 GB/s (Bus BW)
+    33554432 bytes (32 MB):   15236.2 μs,  2.20 GB/s (Alg BW),  3.30 GB/s (Bus BW)
+
+[all_gather]
+   134217728 bytes (128 MB):  33139.1 μs,  4.05 GB/s (Alg BW),  3.04 GB/s (Bus BW)
+    67108864 bytes (64 MB):   15800.0 μs,  4.25 GB/s (Alg BW),  3.19 GB/s (Bus BW)
+    33554432 bytes (32 MB):    7731.17 μs,  4.34 GB/s (Alg BW),  3.26 GB/s (Bus BW)
+```
+
+結果ファイルは `/tmp/nccl-benchmark-results/` に保存されます：
+
+- `all_reduce_TCP_YYYYMMDD_HHMMSS.txt`
+- `all_gather_TCP_YYYYMMDD_HHMMSS.txt`
+
+**注意**: この測定では EFA デバイスが検出されず、TCP モードで実行されました。EFA を有効化するには、以下の環境変数を設定してください：
+
+```bash
+export FI_PROVIDER=efa
+export FI_EFA_USE_DEVICE_RDMA=1
+export NCCL_DEBUG=INFO
+
+bash nccl-benchmark.sh
+```
+
+EFA が正常に動作している場合、ファイル名に `_EFA_` が含まれ、帯域幅が大幅に向上します（10+ GB/s）。
+
+### 12. MLflow 接続テスト
+
+MLflow への接続を確認します。SageMaker Managed MLflow への接続には `sagemaker-mlflow` プラグインが必要です。このプラグインが **SigV4 認証**を自動処理するため、presigned URL の手動取得は不要です。
+
+#### 12.1. 依存パッケージのインストール
+
+```bash
+# インスタンス上で実行
+cd /tmp/disaggregated-inference-with-nixl-over-aws-efa/scripts
+
+# sagemaker-mlflow プラグインと依存パッケージをインストール
+bash install-mlflow-deps.sh
+```
+
+`install-mlflow-deps.sh` は、まず `sagemaker-mlflow` プラグイン（依存関係として `mlflow` と `boto3` を含む）をインストールします。次に MLflow プラグインのエントリポイントが正しく登録されているか確認し、AWS 認証情報が利用可能であることを検証します。最後に `MLFLOW_TRACKING_ARN` 環境変数が設定されているかを確認します。
+
+**仕組み**: `sagemaker-mlflow` プラグインは MLflow のプラグインシステムに 3 つのエントリポイントを登録します。`mlflow.tracking_store` は ARN から SageMaker MLflow エンドポイント URL を構築し、`mlflow.request_auth_provider` は各 API リクエストに SigV4 認証ヘッダーを自動付与し、`mlflow.request_header_provider` は `x-mlflow-sm-tracking-server-arn` ヘッダーを追加します。これにより、tracking URI に ARN を設定するだけで、認証が透過的に処理されます。
+
+#### 12.2. 接続テストの実行
+
+```bash
+# 環境変数の確認（SSM セッションでは手動で読み込む必要あり）
+source /etc/environment
+echo $MLFLOW_TRACKING_ARN
 
 # 接続テスト（scripts ディレクトリ内で実行すること）
 python3 test-mlflow.py
@@ -338,7 +477,7 @@ python3 test-mlflow.py
 
 **補足**: `test-mlflow.py` は同ディレクトリの `mlflow_helper.py` をインポートするため、必ず `scripts/` ディレクトリ内から実行してください。
 
-成功すると以下の出力が表示されます：
+成功すると以下の出力が表示されます（実際の測定結果）：
 
 ```
 ================================================================================
@@ -346,39 +485,61 @@ MLflow Connectivity Test
 ================================================================================
 
 [STEP 1] Setting up MLflow tracking...
-  Tracking URI configured (valid for 12.0 hours)
+[INFO] MLflow tracking URI を設定しました
+  Server:   nixl-efa-mlflow
+  Region:   us-east-1
+  Type:     mlflow-tracking-server
+  Auth:     SigV4 (sagemaker-mlflow plugin)
+  Status:   [OK] 接続成功
+  Tracking URI (ARN): arn:aws:sagemaker:us-east-1:776010787911:mlflow-tracking-server/nixl-efa-mlflow
 
 [STEP 2] Creating/getting experiment: nixl-efa-test
+2026/02/26 02:56:06 INFO mlflow.tracking.fluent: Experiment with name 'nixl-efa-test' does not exist. Creating a new experiment.
   Experiment ID: 1
+  Artifact Location: s3://mlflow-prod-east-1-mlflowartifactbucket43798744-as7yhc43kxgl/mlflow-artifacts/1
 
 [STEP 3] Starting test run...
-  Run ID: abc123def456...
+  Run ID: 87d08e9a758d4da289aced184aaedf39
 
 [STEP 4] Logging parameters...
   - backend: tcp
   - prompt_tokens: 128
   - max_tokens: 128
-  ...
+  - concurrency: 1
+  - engine: vllm
+  - model: test-model
+  - test_type: connectivity
 
 [STEP 5] Logging metrics...
   - ttft_mean: 100.5
   - ttft_p50: 98.2
-  ...
+  - ttft_p95: 120.3
+  - ttft_p99: 145.7
+  - tpot_mean: 10.2
+  - tpot_p50: 9.8
+  - throughput_tokens_per_sec: 500.0
 
 [STEP 6] Logging tags...
 
 [STEP 7] Retrieving and verifying run...
-  [OK] All parameters verified
-  [OK] All metrics verified
+  Verifying parameters...
+    [OK] All parameters verified
+  Verifying metrics...
+    [OK] All metrics verified
 
-[STEP 8] Listing recent runs...
+[STEP 8] Listing recent runs in experiment...
+  Found 1 recent run(s):
+    1. Run ID: 87d08e9a758d4da289aced184aaedf39
+       Name: connectivity_test_20260226_025607
+       Status: FINISHED
+       Start Time: 2026-02-26 02:56:07.718000
 
 ================================================================================
 [SUCCESS] All MLflow connectivity tests passed!
 ================================================================================
 ```
 
-### 12. MLflow UI での確認
+### 13. MLflow UI での確認
 
 1. AWS Console → SageMaker → MLflow Tracking Servers
 2. "nixl-efa-mlflow" を選択
@@ -390,37 +551,33 @@ MLflow Connectivity Test
 
 以下は CDK 実装の技術的なポイントです。環境構築の手順としては不要ですが、実装の背景を理解する際の参考にしてください。
 
-### MLflow Presigned URL の動的取得
+### sagemaker-mlflow プラグインによる SigV4 認証
 
-SageMaker Managed MLflow への接続には presigned URL (有効期限 12 時間) が必要です。実行時に動的取得する方式により、期限切れを回避します。
+SageMaker Managed MLflow への接続には `sagemaker-mlflow` プラグインを使用します。このプラグインは MLflow のプラグインシステム（entry_points）を通じて自動的に有効化され、tracking URI に ARN を設定するだけで SigV4 認証が透過的に処理されます。
 
 **実装の抜粋 (scripts/mlflow_helper.py)**:
 
 ```python
-def get_presigned_mlflow_url(
-    tracking_arn: Optional[str] = None,
-    session_expiration_duration: int = 43200
-) -> str:
+def setup_mlflow_tracking(tracking_arn=None):
     arn = tracking_arn or os.environ.get("MLFLOW_TRACKING_ARN")
-    tracking_server_name = arn.split("/")[-1]
 
-    cmd = [
-        "aws", "sagemaker", "create-presigned-mlflow-tracking-server-url",
-        "--tracking-server-name", tracking_server_name,
-        "--session-expiration-duration-in-seconds", str(session_expiration_duration),
-        "--output", "json"
-    ]
+    # sagemaker-mlflow プラグインが自動的に以下を処理:
+    # 1. ARN からエンドポイント URL を構築
+    # 2. 各リクエストに SigV4 認証ヘッダーを付与
+    # 3. x-mlflow-sm-tracking-server-arn ヘッダーを追加
+    os.environ["MLFLOW_TRACKING_URI"] = arn
+    mlflow.set_tracking_uri(arn)
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    response = json.loads(result.stdout)
-    return response["AuthorizedUrl"]
+    return arn
 ```
+
+**注**: presigned URL 方式はブラウザ用の Web UI アクセス向けであり、Python クライアントからの API アクセスには `sagemaker-mlflow` プラグインの SigV4 認証を使用します。
 
 ### EFA の有効化
 
 CDK で EFA を有効化するには、`CfnNetworkInterface` の `interfaceType` を `"efa"` に設定します。
 
-**実装 (cdk/lib/nixl-efa-stack.ts)**:
+**実装 (cdk/lib/nixl-efa-stack.ts)**: *
 
 ```typescript
 const node1Efa = new ec2.CfnNetworkInterface(this, "Node1EfaInterface", {
@@ -458,9 +615,9 @@ this.securityGroup.addIngressRule(
 
 ### EFA デバイスが検出されない
 
-**症状**: `check-environment.sh` で EFA チェックが失敗
+**症状**: *`check-environment.sh` で EFA チェックが失敗
 
-**対処法**:
+**対処法**: *
 
 ```bash
 # インスタンスタイプを確認
@@ -474,30 +631,42 @@ EFA 対応インスタンスタイプ: p4d.24xlarge, p5.48xlarge, g5.12xlarge, g
 
 ### MLflow 接続エラー
 
-**症状**: `test-mlflow.py` が "AccessDenied" で失敗
+**症状**: `test-mlflow.py` が "AccessDenied" または "403" で失敗
 
 **対処法**:
 
-インスタンスの IAM ロールに以下のポリシーが含まれているか確認：
+インスタンスの IAM ロールに以下の 2 つのポリシーが含まれているか確認してください。SageMaker Managed MLflow はコントロールプレーン（`sagemaker:*`）とデータプレーン（`sagemaker-mlflow:*`）で別々の IAM アクションを使用します。
+
+コントロールプレーン（presigned URL 生成や tracking server 情報の取得）:
 
 ```json
 {
   "Effect": "Allow",
   "Action": [
-    "sagemaker: DescribeMlflowTrackingServer",
-    "sagemaker: CreatePresignedMlflowTrackingServerUrl"
+    "sagemaker:DescribeMlflowTrackingServer",
+    "sagemaker:CreatePresignedMlflowTrackingServerUrl"
   ],
-  "Resource": "arn: aws: sagemaker: *: *: mlflow-tracking-server/*"
+  "Resource": "*"
 }
 ```
 
-本プロジェクトの CDK 実装には既に含まれています。
+データプレーン（実験・ラン・メトリクスの読み書き）:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "sagemaker-mlflow:*",
+  "Resource": "*"
+}
+```
+
+本プロジェクトの CDK 実装には両方とも含まれています。
 
 ### インスタンス起動失敗 (Insufficient capacity)
 
-**症状**: CDK デプロイ時に容量不足エラー
+**症状**: *CDK デプロイ時に容量不足エラー
 
-**対処法**:
+**対処法**: *
 
 別の Availability Zone を試す：
 
@@ -507,22 +676,22 @@ npx cdk deploy --all \
   --context trackingServerName=nixl-efa-mlflow
 ```
 
-または、より小さいインスタンスタイプで検証：
+別のインスタンスタイプを指定する場合：
 
 ```bash
 npx cdk deploy --all \
-  --context instanceType=g5.8xlarge \
+  --context instanceType=g5.24xlarge \
   --context availabilityZone=us-east-1a \
   --context trackingServerName=nixl-efa-mlflow
 ```
 
-**注**: g5.8xlarge は EFA 対応の最小 g5 インスタンスです。g5.xlarge〜g5.4xlarge は EFA に対応していません。
+**注**: EFA 対応の g5 インスタンスは g5.12xlarge 以上です。g5.xlarge、g5.2xlarge、g5.4xlarge、g5.8xlarge は EFA に対応していません。
 
 ### SSM Session Manager に接続できない
 
-**症状**: "TargetNotConnected" エラー
+**症状**: *"TargetNotConnected" エラー
 
-**対処法**:
+**対処法**: *
 
 ```bash
 # インスタンスの SSM 接続状態を確認
@@ -534,9 +703,9 @@ SSM エージェントの起動には数分かかる場合があります。`Pin
 
 ### User Data の実行失敗
 
-**症状**: `MLFLOW_TRACKING_ARN` が設定されない
+**症状**: *`MLFLOW_TRACKING_ARN` が設定されない
 
-**対処法**:
+**対処法**: *
 
 ```bash
 # インスタンス上で cloud-init ログを確認
@@ -554,7 +723,7 @@ npx cdk destroy --all
 
 確認プロンプトで `y` を入力します。
 
-**重要**: SageMaker Managed MLflow が作成した S3 バケットは手動で削除が必要です。
+**重要**: *SageMaker Managed MLflow が作成した S3 バケットは手動で削除が必要です。
 
 ```bash
 # MLflow のアーティファクト用バケットを確認
@@ -568,9 +737,9 @@ aws s3 rb s3://<bucket-name> --force
 
 本記事では、AWS CDK を使用して以下を構築しました：
 
-- **SageMaker Managed MLflow**: 実験の体系的な管理が可能に
+- **SageMaker Managed MLflow**: *実験の体系的な管理が可能に
 - **EFA 対応 GPU クラスタ**: 低レイテンシの KV-Cache 転送環境
-- **SSM Session Manager**: 安全なアクセス環境
+- **SSM Session Manager**: *安全なアクセス環境
 
 この環境により、Disaggregated Inference の性能を正確に測定し、MLflow で実験結果を管理できるようになりました。次回は、vLLM を使用した分散推論の実装と実験実行について解説します。
 

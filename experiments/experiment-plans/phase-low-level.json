@@ -1,0 +1,307 @@
+{
+  "phase": "low-level",
+  "name": "Low-Level Network Measurement with Phase 3 Tools",
+  "description": "Direct measurement of network-level metrics using fi_pingpong, NIXLBench, KVBench, and ucx_perftest to provide empirical evidence for E2E observations from Phase 14/15",
+  "infrastructure": {
+    "instance_type": "g5.12xlarge",
+    "node_count": 2,
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "vllm_version": "v0.15.1",
+    "venv_path": "/opt/dlami/nvme/venv/vllm-0.16",
+    "gpu_count_per_node": 4,
+    "nixl_path": "/opt/dlami/nvme/nixl",
+    "etcd_version": "v3.5.18",
+    "etcd_port": 2379
+  },
+  "common_settings": {
+    "measurement_iterations": 100,
+    "warmup_iterations": 10
+  },
+  "kv_cache_reference": {
+    "_comment": "Qwen2.5-7B-Instruct: layers=28, kv_heads=4, head_dim=128, dtype=bf16",
+    "bytes_per_token": 57344,
+    "sizes": {
+      "1k_tokens": {"tokens": 1000, "bytes": 57344000, "human": "55 MB"},
+      "4k_tokens": {"tokens": 4096, "bytes": 234881024, "human": "224 MB"},
+      "8k_tokens": {"tokens": 8192, "bytes": 469762048, "human": "448 MB"},
+      "12k_tokens": {"tokens": 12288, "bytes": 704643072, "human": "672 MB"},
+      "20k_tokens": {"tokens": 20000, "bytes": 1146880000, "human": "1.07 GB"}
+    }
+  },
+  "validation_targets": [
+    {
+      "claim": "TPOT is backend-independent because KV-Cache transfer and Decode are temporally separated",
+      "current_evidence": "E2E measurement inference",
+      "confidence": "medium",
+      "tools": ["nixlbench"],
+      "expected_outcome": "Direct measurement of KV-Cache transfer time confirms transfer completes before Decode starts"
+    },
+    {
+      "claim": "TCP c=16 shows 2.72x degradation due to incast (IEEE Micro 2020)",
+      "current_evidence": "Literature similarity",
+      "confidence": "medium",
+      "tools": ["fi_pingpong", "nixlbench"],
+      "expected_outcome": "Packet loss and latency spikes under 16-way concurrent access with fi_pingpong; NIXLBench many_to_one reproduces degradation"
+    },
+    {
+      "claim": "12K token 7.31x gap between theoretical and measured (TCP slow start, MR cache, etc.)",
+      "current_evidence": "Multi-factor speculation",
+      "confidence": "low",
+      "tools": ["kvbench", "nixlbench"],
+      "expected_outcome": "KVBench separates TCP slow start, MR cache warmup, and protocol overhead contributions"
+    },
+    {
+      "claim": "EFA 4-tier staircase structure reflects SRD per-packet multipath routing",
+      "current_evidence": "Observation from E2E measurement",
+      "confidence": "medium",
+      "tools": ["nixlbench"],
+      "expected_outcome": "NIXLBench many_to_one with c=1,4,8,16 reproduces staircase at network level"
+    }
+  ],
+  "layers": [
+    {
+      "id": "L0",
+      "name": "EFA Basic Latency (fi_pingpong)",
+      "priority": "P0",
+      "description": "Measure pure EFA network latency to isolate network layer from vLLM overhead",
+      "tool": "fi_pingpong",
+      "estimated_time_minutes": 15,
+      "patterns": [
+        {
+          "id": "pll-fi-pingpong-efa-default",
+          "tool": "fi_pingpong",
+          "provider": "efa",
+          "message_sizes": ["64", "1K", "64K", "1M"],
+          "iterations": 1000,
+          "role": "both"
+        },
+        {
+          "id": "pll-fi-rma-pingpong-efa-1m",
+          "tool": "fi_rma_pingpong",
+          "provider": "efa",
+          "message_sizes": ["1M", "10M", "100M"],
+          "iterations": 100,
+          "role": "both"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "name": "NIXL Transfer Measurement (NIXLBench)",
+      "priority": "P0",
+      "description": "Direct KV-Cache transfer time measurement with VRAM-to-VRAM transfer via NIXL",
+      "tool": "nixlbench",
+      "estimated_time_minutes": 60,
+      "prerequisite": "ETCD server running on Node1",
+      "patterns": [
+        {
+          "id": "pll-nixlbench-efa-55m",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "57344000",
+          "message_size_human": "55 MB (1K tokens)",
+          "num_threads": 1,
+          "scheme": "pairwise",
+          "iterations": 100
+        },
+        {
+          "id": "pll-nixlbench-efa-224m",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "234881024",
+          "message_size_human": "224 MB (4K tokens)",
+          "num_threads": 1,
+          "scheme": "pairwise",
+          "iterations": 50
+        },
+        {
+          "id": "pll-nixlbench-efa-672m",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "704643072",
+          "message_size_human": "672 MB (12K tokens)",
+          "num_threads": 1,
+          "scheme": "pairwise",
+          "iterations": 30
+        },
+        {
+          "id": "pll-nixlbench-ucx-55m",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "57344000",
+          "message_size_human": "55 MB (1K tokens)",
+          "num_threads": 1,
+          "scheme": "pairwise",
+          "iterations": 100
+        },
+        {
+          "id": "pll-nixlbench-ucx-224m",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "234881024",
+          "message_size_human": "224 MB (4K tokens)",
+          "num_threads": 1,
+          "scheme": "pairwise",
+          "iterations": 50
+        },
+        {
+          "id": "pll-nixlbench-ucx-672m",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "704643072",
+          "message_size_human": "672 MB (12K tokens)",
+          "num_threads": 1,
+          "scheme": "pairwise",
+          "iterations": 30
+        },
+        {
+          "id": "pll-nixlbench-efa-m2o-c4",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "57344000",
+          "message_size_human": "55 MB (1K tokens)",
+          "num_threads": 4,
+          "scheme": "many_to_one",
+          "iterations": 50
+        },
+        {
+          "id": "pll-nixlbench-efa-m2o-c16",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "57344000",
+          "message_size_human": "55 MB (1K tokens)",
+          "num_threads": 16,
+          "scheme": "many_to_one",
+          "iterations": 50
+        },
+        {
+          "id": "pll-nixlbench-ucx-m2o-c16",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "57344000",
+          "message_size_human": "55 MB (1K tokens)",
+          "num_threads": 16,
+          "scheme": "many_to_one",
+          "iterations": 50
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "name": "KV-Cache Transfer Profiling (KVBench)",
+      "priority": "P0",
+      "description": "LLM-aware KV-Cache transfer profiling with Qwen2.5-7B model parameters",
+      "tool": "kvbench",
+      "estimated_time_minutes": 90,
+      "prerequisite": "ETCD server running on Node1, KVBench installed",
+      "patterns": [
+        {
+          "id": "pll-kvbench-efa-1k",
+          "tool": "kvbench",
+          "backend": "Libfabric",
+          "model_config": "qwen2.5-7b",
+          "prompt_tokens": 1000,
+          "action": "profile"
+        },
+        {
+          "id": "pll-kvbench-efa-4k",
+          "tool": "kvbench",
+          "backend": "Libfabric",
+          "model_config": "qwen2.5-7b",
+          "prompt_tokens": 4096,
+          "action": "profile"
+        },
+        {
+          "id": "pll-kvbench-efa-12k",
+          "tool": "kvbench",
+          "backend": "Libfabric",
+          "model_config": "qwen2.5-7b",
+          "prompt_tokens": 12288,
+          "action": "profile"
+        },
+        {
+          "id": "pll-kvbench-ucx-1k",
+          "tool": "kvbench",
+          "backend": "UCX",
+          "model_config": "qwen2.5-7b",
+          "prompt_tokens": 1000,
+          "action": "profile"
+        },
+        {
+          "id": "pll-kvbench-ucx-4k",
+          "tool": "kvbench",
+          "backend": "UCX",
+          "model_config": "qwen2.5-7b",
+          "prompt_tokens": 4096,
+          "action": "profile"
+        },
+        {
+          "id": "pll-kvbench-ucx-12k",
+          "tool": "kvbench",
+          "backend": "UCX",
+          "model_config": "qwen2.5-7b",
+          "prompt_tokens": 12288,
+          "action": "profile"
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "name": "UCX Bandwidth Measurement (ucx_perftest)",
+      "priority": "P1",
+      "description": "UCX transport bandwidth measurement to compare with EFA libfabric",
+      "tool": "ucx_perftest",
+      "estimated_time_minutes": 30,
+      "patterns": [
+        {
+          "id": "pll-ucx-bw-cuda-55m",
+          "tool": "ucx_perftest",
+          "memory_type": "cuda",
+          "test_type": "tag_bw",
+          "message_size": "57344000",
+          "message_size_human": "55 MB (1K tokens)",
+          "iterations": 10,
+          "transport": "srd"
+        },
+        {
+          "id": "pll-ucx-bw-cuda-672m",
+          "tool": "ucx_perftest",
+          "memory_type": "cuda",
+          "test_type": "tag_bw",
+          "message_size": "704643072",
+          "message_size_human": "672 MB (12K tokens)",
+          "iterations": 10,
+          "transport": "srd"
+        },
+        {
+          "id": "pll-ucx-lat-cuda-64",
+          "tool": "ucx_perftest",
+          "memory_type": "cuda",
+          "test_type": "tag_lat",
+          "message_size": "64",
+          "message_size_human": "64 bytes (baseline latency)",
+          "iterations": 1000,
+          "transport": "srd"
+        }
+      ]
+    }
+  ]
+}

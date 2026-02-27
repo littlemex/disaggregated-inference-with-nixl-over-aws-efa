@@ -1,0 +1,82 @@
+{
+  "name": "Low-Level: fi_pingpong {{ provider|upper }} - {{ tool }}",
+  "description": "EFA basic latency measurement using {{ tool }} with provider={{ provider }}",
+  "variables": {
+    "OUTPUT_DIR": "/tmp/low-level-results",
+    "OUTPUT_FILE": "/tmp/low-level-results/{{ pattern_id }}.json",
+    "NODE1_PRIVATE": "{{"{{"}}NODE1_PRIVATE{{"}}"}}"
+  },
+  "tasks": [
+    {
+      "id": "01-create-output-dir",
+      "name": "Create Output Directory",
+      "description": "Create directory for measurement results",
+      "skip_if": "test -d /tmp/low-level-results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results",
+        "echo '[OK] Output directory created'"
+      ]
+    },
+    {
+      "id": "02-verify-efa-device",
+      "name": "Verify EFA Device",
+      "description": "Verify EFA device is available",
+      "commands": [
+        "fi_info -p {{ provider }} -t FI_EP_RDM 2>/dev/null | head -5 || { echo '[ERROR] EFA device not found'; exit 1; }",
+        "echo '[OK] EFA device available'"
+      ]
+    },
+{% if role == 'both' or role == 'server' %}
+    {
+      "id": "03-run-server",
+      "name": "Start {{ tool }} Server",
+      "description": "Start {{ tool }} server in background",
+      "commands": [
+        "echo '[INFO] Starting {{ tool }} server...'",
+{% for size in message_sizes %}
+        "echo '[INFO] --- Message size: {{ size }} ---'",
+        "timeout 60 {{ tool }} -p {{ provider }}{% if size != 'default' %} -S {{ size }}{% endif %} -I {{ iterations }} 2>&1 | tee -a {{"{{"}}OUTPUT_DIR{{"}}"}}/{{ pattern_id }}_server_{{ size }}.log &",
+        "SERVER_PID=$!",
+        "sleep 2",
+{% endfor %}
+        "echo '[OK] {{ tool }} server started'"
+      ]
+    },
+{% endif %}
+{% if role == 'both' or role == 'client' %}
+    {
+      "id": "04-run-client",
+      "name": "Run {{ tool }} Client",
+      "description": "Run {{ tool }} client against server",
+      "commands": [
+        "if [ -z \"$NODE1_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE not set'; exit 1; fi",
+        "RESULTS_JSON='{\"tool\": \"{{ tool }}\", \"provider\": \"{{ provider }}\", \"pattern_id\": \"{{ pattern_id }}\", \"timestamp\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\", \"results\": ['",
+        "FIRST=true",
+{% for size in message_sizes %}
+        "echo '[INFO] --- Measuring message size: {{ size }} ---'",
+        "RAW_OUTPUT=$(timeout 120 {{ tool }} -p {{ provider }}{% if size != 'default' %} -S {{ size }}{% endif %} -I {{ iterations }} $NODE1_PRIVATE 2>&1)",
+        "echo \"$RAW_OUTPUT\"",
+        "LATENCY=$(echo \"$RAW_OUTPUT\" | grep -E '^[0-9]' | tail -1 | awk '{print $NF}')",
+        "BANDWIDTH=$(echo \"$RAW_OUTPUT\" | grep -E '^[0-9]' | tail -1 | awk '{print $(NF-1)}')",
+        "if [ \"$FIRST\" = \"true\" ]; then FIRST=false; else RESULTS_JSON=\"$RESULTS_JSON,\"; fi",
+        "RESULTS_JSON=\"$RESULTS_JSON{\\\"message_size\\\": \\\"{{ size }}\\\", \\\"latency_us\\\": $LATENCY, \\\"bandwidth_mbps\\\": $BANDWIDTH}\"",
+{% endfor %}
+        "RESULTS_JSON=\"$RESULTS_JSON]}\"",
+        "echo \"$RESULTS_JSON\" | python3 -m json.tool > {{"{{"}}OUTPUT_FILE{{"}}"}}",
+        "echo '[OK] Results saved to {{"{{"}}OUTPUT_FILE{{"}}"}}'",
+        "cat {{"{{"}}OUTPUT_FILE{{"}}"}}"
+      ]
+    },
+{% endif %}
+    {
+      "id": "05-collect-results",
+      "name": "Collect Results",
+      "description": "Display measurement results",
+      "commands": [
+        "echo '--- fi_pingpong Results ---'",
+        "cat {{"{{"}}OUTPUT_FILE{{"}}"}} 2>/dev/null || echo '[INFO] Results file not found'",
+        "echo '--- End Results ---'"
+      ]
+    }
+  ]
+}
