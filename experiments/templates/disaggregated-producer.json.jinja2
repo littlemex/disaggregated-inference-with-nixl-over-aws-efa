@@ -55,7 +55,7 @@
       "id": "03-start-producer",
       "name": "Start vLLM Producer ({{ backend|upper }}, {{ 'Prefix Cache ON' if prefix_cache else 'Prefix Cache OFF' }})",
       "description": "Start Producer ({{ backend|upper }}, max_model_len={{ max_model_len }})",
-      "skip_if": "pgrep -f 'vllm.entrypoints.openai.api_server.*kv_producer' > /dev/null && curl -s http://localhost:{{"{{"}}PORT{{"}}"}}/health | grep -q ok",
+      "skip_if": "pgrep -f 'vllm.entrypoints.openai.api_server.*kv_producer.*--max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}}' > /dev/null && curl -s http://localhost:{{"{{"}}PORT{{"}}"}}/health | grep -q ok",
       "commands": [
         "if [ -z \"$NODE1_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE not set'; exit 1; fi",
 {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}
@@ -146,6 +146,20 @@
         "echo '--- Results Summary ---'",
         "cat {{"{{"}}OUTPUT_FILE{{"}}"}} | head -30 || echo '[INFO] Results file not found'",
         "echo '--- End Results ---'"
+      ]
+    },
+    {
+      "id": "99-cleanup-after-measurement",
+      "name": "Cleanup After Measurement",
+      "description": "Terminate vLLM Producer and Proxy to free GPU memory",
+      "commands": [
+        "echo '[INFO] Cleaning up Producer and Proxy processes...'",
+        "sudo pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true",
+        "sudo pkill -9 -f 'ray::' 2>/dev/null || true",
+        "sudo pkill -9 -f 'disagg_proxy' 2>/dev/null || true",
+        "sleep 5",
+        "nvidia-smi --query-gpu=index,memory.used --format=csv,noheader || true",
+        "echo '[OK] Cleanup complete'"
       ]
     }
   ]

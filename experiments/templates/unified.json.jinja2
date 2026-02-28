@@ -48,7 +48,7 @@
       "id": "03-start-unified",
       "name": "Start Unified vLLM ({{ 'Prefix Cache ON' if prefix_cache else 'Prefix Cache OFF' }})",
       "description": "Start Unified server (gpu={{ gpu_memory_utilization }}, max_model_len={{ max_model_len }})",
-      "skip_if": "pgrep -f 'vllm.entrypoints.openai.api_server' > /dev/null && curl -s http://localhost:{{"{{"}}PORT{{"}}"}}/health | grep -q ok",
+      "skip_if": "pgrep -f 'vllm.entrypoints.openai.api_server.*--max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}}' > /dev/null && curl -s http://localhost:{{"{{"}}PORT{{"}}"}}/health | grep -q ok",
       "commands": [
 {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}
         "export NCCL_DEBUG=INFO",
@@ -56,7 +56,7 @@
         "export FI_PROVIDER=efa",
         "export FI_EFA_USE_DEVICE_RDMA=1",
 {% endif %}
-        "nohup {{VENV_PATH}}/bin/python3 -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{"{{"}}TP_SIZE{{"}}"}} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
+        "nohup python3 -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{"{{"}}TP_SIZE{{"}}"}} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
         "echo $! > {{"{{"}}PID_FILE{{"}}"}}",
         "echo '[OK] Unified server started ({{ 'Prefix Cache ON' if prefix_cache else 'Prefix Cache OFF' }})'"
       ]
@@ -84,7 +84,7 @@
       "name": "Run Benchmark ({{ prompt_tokens }} tokens, c={{ concurrency }})",
       "description": "Run benchmark (warmup={{ warmup_iterations }}, measurement={{ measurement_iterations }}, c={{ concurrency }})",
       "commands": [
-        "{{VENV_PATH}}/bin/python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode unified --backend none --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
+        "python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode unified --backend none --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]
     }
@@ -94,7 +94,7 @@
       "name": "Run Benchmark (Offline, {{ prompt_tokens }} tokens)",
       "description": "Run offline benchmark (Python API direct)",
       "commands": [
-        "{{VENV_PATH}}/bin/python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type offline --model {{"{{"}}MODEL{{"}}"}} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
+        "python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type offline --model {{"{{"}}MODEL{{"}}"}} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]
     }
@@ -107,6 +107,19 @@
         "echo '--- Results Summary ---'",
         "cat {{"{{"}}OUTPUT_FILE{{"}}"}} | head -30 || echo '[INFO] Results file not found'",
         "echo '--- End Results ---'"
+      ]
+    },
+    {
+      "id": "99-cleanup-after-measurement",
+      "name": "Cleanup After Measurement",
+      "description": "Terminate vLLM processes to free GPU memory",
+      "commands": [
+        "echo '[INFO] Cleaning up vLLM processes...'",
+        "sudo pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true",
+        "sudo pkill -9 -f 'ray::' 2>/dev/null || true",
+        "sleep 5",
+        "nvidia-smi --query-gpu=index,memory.used --format=csv,noheader || true",
+        "echo '[OK] Cleanup complete'"
       ]
     }
   ]
