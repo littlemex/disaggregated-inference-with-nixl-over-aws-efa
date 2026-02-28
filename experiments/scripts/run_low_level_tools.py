@@ -54,7 +54,7 @@ except ImportError:
 
 SCRIPT_DIR = Path(__file__).parent
 EXPERIMENTS_DIR = SCRIPT_DIR.parent
-MLFLOW_EXPERIMENT_NAME = "low-level-network"
+MLFLOW_EXPERIMENT_NAME_DEFAULT = "low-level-network"
 
 # Tool-to-Layer mapping from phase-low-level.json
 TOOL_LAYER_MAP = {
@@ -66,9 +66,12 @@ TOOL_LAYER_MAP = {
 }
 
 
-def load_experiment_plan() -> dict:
-    """Load the low-level experiment plan."""
-    plan_path = EXPERIMENTS_DIR / "experiment-plans" / "phase-low-level.json"
+def load_experiment_plan(phase_name: str = "phase-low-level") -> dict:
+    """Load experiment plan for the given phase.
+
+    Supports both 'phase-low-level' (original) and 'phase1' (Phase 1 integration).
+    """
+    plan_path = EXPERIMENTS_DIR / "experiment-plans" / f"{phase_name}.json"
     if not plan_path.exists():
         print(f"[ERROR] Experiment plan not found: {plan_path}")
         sys.exit(1)
@@ -165,6 +168,24 @@ def collect_results(results_dir: Path) -> Dict[str, Dict]:
     return results
 
 
+def get_experiment_name(plan: dict, result_data: dict = None) -> str:
+    """Determine MLflow experiment name based on phase.
+
+    Phase-aware naming:
+    - phase-low-level.json (phase="low-level") -> "low-level-network"
+    - phase1.json (phase=1) -> "low-level-network-phase-1"
+    - Other phases -> "low-level-network-phase-{N}"
+
+    Falls back to result_data["phase"] if plan phase is not available.
+    """
+    phase = plan.get("phase", "low-level")
+    if result_data and "phase" in result_data:
+        phase = result_data["phase"]
+    if phase == "low-level":
+        return MLFLOW_EXPERIMENT_NAME_DEFAULT
+    return f"low-level-network-phase-{phase}"
+
+
 def record_to_mlflow(
     results: Dict[str, Dict],
     plan: dict,
@@ -177,10 +198,14 @@ def record_to_mlflow(
         return
 
     mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
+    # Determine experiment name from plan phase
+    experiment_name = get_experiment_name(plan)
+    mlflow.set_experiment(experiment_name)
 
     kv_ref = plan.get("kv_cache_reference", {})
     infra = plan.get("infrastructure", {})
+    phase = plan.get("phase", "low-level")
 
     for pattern_id, data in results.items():
         if "_error" in data and not data.get("tool"):
@@ -190,12 +215,33 @@ def record_to_mlflow(
         tool = data.get("tool", "unknown")
         run_name = f"{pattern_id}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
+        # Per-result experiment override (if result has different phase)
+        result_phase = data.get("phase", str(phase))
+        result_experiment = get_experiment_name(plan, data)
+        if result_experiment != experiment_name:
+            mlflow.set_experiment(result_experiment)
+
         with mlflow.start_run(run_name=run_name):
             # Common tags
-            mlflow.set_tag("phase", "low-level")
+            mlflow.set_tag("phase", str(result_phase))
             mlflow.set_tag("tool", tool)
             mlflow.set_tag("pattern_id", pattern_id)
-            mlflow.set_tag("instance_type", infra.get("instance_type", "unknown"))
+            mlflow.set_tag("instance_type",
+                           data.get("instance_type") or infra.get("instance_type", "unknown"))
+
+            # Phase-specific tags (model, model_size, gpu_type)
+            model = data.get("model") or infra.get("model", "")
+            if model:
+                mlflow.set_tag("model", model)
+            model_size = data.get("model_size") or infra.get("model_size", "")
+            if model_size:
+                mlflow.set_tag("model_size", model_size)
+            gpu_type = infra.get("gpu_type", "")
+            if gpu_type:
+                mlflow.set_tag("gpu_type", gpu_type)
+            bytes_per_token = data.get("bytes_per_token") or kv_ref.get("bytes_per_token", 0)
+            if bytes_per_token:
+                mlflow.set_tag("bytes_per_token", str(bytes_per_token))
 
             # Layer tag
             layer_id = TOOL_LAYER_MAP.get(tool, "unknown")
@@ -213,7 +259,7 @@ def record_to_mlflow(
 
             print(f"  [OK] MLflow run created: {run_name}")
 
-    print(f"[OK] Recorded {len(results)} results to MLflow experiment '{MLFLOW_EXPERIMENT_NAME}'")
+    print(f"[OK] Recorded {len(results)} results to MLflow experiment '{experiment_name}'")
 
 
 def _record_fi_pingpong(data: Dict) -> None:
@@ -252,9 +298,9 @@ def _record_nixlbench(data: Dict, kv_ref: dict) -> None:
     if data.get("transfer_time_ms"):
         mlflow.log_metric("transfer_time_ms", data["transfer_time_ms"])
 
-    # KV-Cache equivalent tag
+    # KV-Cache equivalent tag (use result-level bytes_per_token if available)
     msg_size = data.get("message_size", 0)
-    bytes_per_token = kv_ref.get("bytes_per_token", 57344)
+    bytes_per_token = data.get("bytes_per_token") or kv_ref.get("bytes_per_token", 57344)
     if msg_size and bytes_per_token:
         equiv_tokens = msg_size / bytes_per_token
         mlflow.set_tag("kv_cache_equivalent_tokens", f"{equiv_tokens:.0f}")
@@ -369,11 +415,16 @@ def main():
         action="store_true",
         help="Skip MLflow recording",
     )
+    parser.add_argument(
+        "--phase",
+        default="phase-low-level",
+        help="Experiment plan name (default: phase-low-level, also: phase1)",
+    )
 
     args = parser.parse_args()
 
     # Load experiment plan
-    plan = load_experiment_plan()
+    plan = load_experiment_plan(args.phase)
     print(f"[INFO] Experiment: {plan['name']}")
     print(f"[INFO] Infrastructure: {plan['infrastructure']['instance_type']}")
 
@@ -385,7 +436,7 @@ def main():
                 break
 
     # Determine task definitions directory
-    phase_dir = EXPERIMENTS_DIR / "task-definitions" / "phase-low-level"
+    phase_dir = EXPERIMENTS_DIR / "task-definitions" / args.phase
     task_files = find_task_definitions(phase_dir, args.layer)
 
     print(f"[INFO] Found {len(task_files)} task definitions")

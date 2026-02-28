@@ -1,0 +1,1580 @@
+{
+  "phase": 1,
+  "name": "Complete Re-measurement: Unified + EFA + TCP (1K-128K)",
+  "description": "Full re-measurement phase with all baseline, unified, EFA, TCP measurements. Replaces Phase 14-18. Includes TPOT separation analysis, bimodality detection, and Proxy overhead isolation.",
+  "created": "2026-02-28",
+  "infrastructure": {
+    "instance_type": "g6e.12xlarge",
+    "node_count": 2,
+    "model": "Qwen/Qwen2.5-32B-Instruct",
+    "model_size": "32B",
+    "vllm_version": "v0.16.0",
+    "nixl_version": "v0.10.0",
+    "gpu_type": "NVIDIA L40S 48GB",
+    "gpu_count_per_node": 4,
+    "tp_size": 4,
+    "efa_bandwidth_gbps": 100,
+    "region": "us-east-1",
+    "placement_group": "cluster"
+  },
+  "common_settings": {
+    "max_tokens": 128,
+    "warmup_iterations": 5,
+    "measurement_iterations": 30,
+    "gpu_memory_utilization": 0.9,
+    "max_num_batched_tokens": 4096,
+    "measurement_type": "online",
+    "temperature": 0.0,
+    "streaming": true,
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": true,
+    "enforce_eager": true
+  },
+  "prompt_lengths": {
+    "standard": {
+      "tokens": [1024, 4096, 12288, 32768],
+      "labels": ["1K", "4K", "12K", "32K"]
+    },
+    "long_context": {
+      "tokens": [65536, 102400, 131072],
+      "labels": ["64K", "100K", "128K"],
+      "requires_yarn": true,
+      "rope_scaling": {
+        "type": "yarn",
+        "factor": 4.0,
+        "original_max_position_embeddings": 32768
+      }
+    }
+  },
+  "concurrency_levels": [1, 4, 8, 16],
+  "kv_cache_reference": {
+    "_comment": "Qwen2.5-32B-Instruct: layers=64, kv_heads=8, head_dim=128, dtype=bf16",
+    "bytes_per_token": 262144,
+    "sizes": {
+      "1K": {"tokens": 1024, "total_bytes": 268435456, "total_human": "256 MB", "per_gpu_tp4": "64 MB"},
+      "4K": {"tokens": 4096, "total_bytes": 1073741824, "total_human": "1.0 GB", "per_gpu_tp4": "256 MB"},
+      "12K": {"tokens": 12288, "total_bytes": 3221225472, "total_human": "3.0 GB", "per_gpu_tp4": "768 MB"},
+      "32K": {"tokens": 32768, "total_bytes": 8589934592, "total_human": "8.0 GB", "per_gpu_tp4": "2.0 GB"},
+      "64K": {"tokens": 65536, "total_bytes": 17179869184, "total_human": "16.4 GB", "per_gpu_tp4": "4.1 GB"},
+      "100K": {"tokens": 102400, "total_bytes": 26843545600, "total_human": "25.6 GB", "per_gpu_tp4": "6.4 GB"},
+      "128K": {"tokens": 131072, "total_bytes": 34359738368, "total_human": "32.8 GB", "per_gpu_tp4": "8.2 GB"}
+    }
+  },
+  "layers": [
+    {
+      "id": "L0-Baseline",
+      "name": "Baseline Measurements",
+      "priority": "P0",
+      "description": "Network and GPU baseline measurements to establish theoretical bandwidth limits and verify EFA/GPU health",
+      "estimated_time_minutes": 60,
+      "patterns": [
+        {
+          "id": "p1-baseline-iperf3",
+          "tool": "iperf3",
+          "description": "TCP bandwidth baseline (iperf3 -c, P=1,4,8, t=30)",
+          "node": "both",
+          "expected": {"tcp_bandwidth_gbps": "9-12"}
+        },
+        {
+          "id": "p1-baseline-fi-rdm-pingpong",
+          "tool": "fi_rdm_pingpong",
+          "description": "EFA ping-pong latency (provider=efa, sizes=64,1K,64K,1M)",
+          "node": "both",
+          "expected": {"efa_latency_us": "5-15"}
+        },
+        {
+          "id": "p1-baseline-fi-rdm-bw",
+          "tool": "fi_rdm_bw",
+          "description": "EFA RDMA bandwidth (provider=efa)",
+          "node": "both",
+          "expected": {"efa_bandwidth_gbps": "30-40"}
+        },
+        {
+          "id": "p1-baseline-fi-info",
+          "tool": "fi_info",
+          "description": "EFA device verification (fi_info -p efa, ibv_devices)",
+          "node": "both",
+          "expected": {"efa_device_count": ">=1"}
+        },
+        {
+          "id": "p1-baseline-nvidia-smi-basic",
+          "tool": "nvidia-smi",
+          "description": "GPU info: memory, utilization, driver version",
+          "node": "both",
+          "expected": {"gpu_memory_total_mb": 49152, "gpu_count": 4}
+        },
+        {
+          "id": "p1-baseline-nvidia-smi-topo",
+          "tool": "nvidia-smi topo -m",
+          "description": "PCIe topology: GPU-NIC connection, GPUDirect RDMA check",
+          "node": "both",
+          "expected": {"gpu_nic_topology": "PHB or NODE"}
+        },
+        {
+          "id": "p1-baseline-nvidia-smi-dmon",
+          "tool": "nvidia-smi dmon",
+          "description": "GPU monitoring: clock, temperature, power, P-state during measurement",
+          "node": "both",
+          "expected": {"gpu_temp_celsius": "<80", "p_state": "P0"}
+        },
+        {
+          "id": "p1-baseline-nccl-test",
+          "tool": "nccl-tests",
+          "description": "NCCL all_reduce_perf bandwidth (1M-1G, g=4)",
+          "node": "both",
+          "expected": {"nccl_bandwidth_gbps_1G": "30-50"}
+        }
+      ]
+    },
+    {
+      "id": "L1-Unified",
+      "name": "Unified Mode (Single Node)",
+      "priority": "P0",
+      "description": "TPOT baseline without KV-Cache transfer. Single node Prefill+Decode. No Proxy. Establishes pure GPU compute baseline for TPOT and Prefill-only TTFT baseline.",
+      "estimated_time_minutes": 180,
+      "vllm_config": {
+        "mode": "unified",
+        "proxy_required": false,
+        "max_model_len": 131072,
+        "port": 8000
+      },
+      "patterns": [
+        {
+          "id": "p1-unified-1k-c1",
+          "mode": "unified",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-4k-c1",
+          "mode": "unified",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-12k-c1",
+          "mode": "unified",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-32k-c1",
+          "mode": "unified",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-64k-c1",
+          "mode": "unified",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-100k-c1",
+          "mode": "unified",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-128k-c1",
+          "mode": "unified",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-unified-1k-c4",
+          "mode": "unified",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-4k-c4",
+          "mode": "unified",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-32k-c4",
+          "mode": "unified",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-4k-c8",
+          "mode": "unified",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-4k-c16",
+          "mode": "unified",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-32k-c8",
+          "mode": "unified",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-32k-c16",
+          "mode": "unified",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        }
+      ]
+    },
+    {
+      "id": "L2-EFA",
+      "name": "EFA Disaggregated (1K-128K)",
+      "priority": "P0",
+      "description": "EFA KV-Cache transfer measurements via Proxy (toy_proxy_server.py). NixlConnector with LIBFABRIC backend, kv_buffer_device=cuda.",
+      "estimated_time_minutes": 420,
+      "vllm_config": {
+        "mode": "disaggregated",
+        "proxy_required": true,
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cuda",
+        "kv_buffer_size": 5000000000,
+        "kv_parallel_size": 2,
+        "nixl_backend": "LIBFABRIC",
+        "max_model_len_standard": 32768,
+        "max_model_len_longctx": 131072,
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000
+      },
+      "patterns": [
+        {
+          "id": "p1-efa-1k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-4k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-12k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-32k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-64k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-100k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-128k-c1",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-efa-1k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-4k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-32k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-4k-c8",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-4k-c16",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-32k-c8",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-32k-c16",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-64k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-64k-c8",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        }
+      ]
+    },
+    {
+      "id": "L3-TCP",
+      "name": "TCP Disaggregated (1K-128K)",
+      "priority": "P0",
+      "description": "TCP KV-Cache transfer measurements via Proxy (toy_proxy_server.py). NixlConnector with UCX backend (UCX_TLS=tcp,self,sm), kv_buffer_device=cpu.",
+      "estimated_time_minutes": 420,
+      "vllm_config": {
+        "mode": "disaggregated",
+        "proxy_required": true,
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cpu",
+        "kv_buffer_size": 5000000000,
+        "kv_parallel_size": 2,
+        "nixl_backend": "UCX",
+        "ucx_tls": "tcp,self,sm",
+        "max_model_len_standard": 32768,
+        "max_model_len_longctx": 131072,
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000
+      },
+      "patterns": [
+        {
+          "id": "p1-tcp-1k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-4k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-12k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-32k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-64k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-100k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-128k-c1",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 1,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "E2E_latency"]
+        },
+        {
+          "id": "p1-tcp-1k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-4k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-32k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-4k-c8",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-4k-c16",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-32k-c8",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-32k-c16",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-64k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-64k-c8",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        }
+      ]
+    },
+    {
+      "id": "L4-Analysis",
+      "name": "Cross-validation and Analysis",
+      "priority": "P0",
+      "description": "TPOT separation analysis (GPU compute vs batch wait), bimodality detection in TTFT, and Proxy overhead isolation using toy_proxy_server.py timestamps.",
+      "estimated_time_minutes": 180,
+      "depends_on": ["L1-Unified", "L2-EFA", "L3-TCP"],
+      "patterns": [
+        {
+          "id": "p1-analysis-tpot-separation",
+          "type": "analysis",
+          "description": "ITL clustering with GMM to separate GPU compute time from batch scheduling wait time at c>=2",
+          "inputs": ["L1-Unified results", "L2-EFA results"],
+          "method": "GaussianMixture n_components=2",
+          "output_metrics": ["gpu_compute_time_ms", "batch_wait_time_ms", "gpu_compute_ratio"]
+        },
+        {
+          "id": "p1-analysis-bimodality-detection",
+          "type": "analysis",
+          "description": "Dip test for bimodal TTFT distribution. Separate Phase A (MR registration cost) from Phase B (steady state).",
+          "inputs": ["L2-EFA TTFT raw data", "L3-TCP TTFT raw data"],
+          "method": "Hartigans dip test + GMM separation",
+          "output_metrics": ["ttft_bimodal", "ttft_phase_a_mean_ms", "ttft_phase_b_mean_ms"]
+        },
+        {
+          "id": "p1-analysis-proxy-overhead",
+          "type": "measurement",
+          "description": "Proxy internal timestamps to measure request forwarding, response relay overhead. Uses modified toy_proxy_server.py.",
+          "inputs": ["L2-EFA measurement runs"],
+          "output_metrics": ["proxy_overhead_prefill_ms", "proxy_overhead_decode_ms", "proxy_overhead_total_ms"],
+          "expected": {"proxy_overhead_total_ms": "3-7"}
+        }
+      ]
+    },
+    {
+      "id": "L5-LowLevel",
+      "name": "Low-Level Network and KV-Cache Transfer Measurement",
+      "priority": "P1",
+      "description": "Direct measurement of network-level metrics using fi_pingpong, NIXLBench, KVBench, and ucx_perftest. Provides empirical evidence for E2E observations and isolates network layer from vLLM overhead. All sizes calibrated for Qwen2.5-32B (262,144 bytes/token).",
+      "estimated_time_minutes": 240,
+      "mlflow_config": {
+        "experiment_name": "phase1-low-level",
+        "run_name_prefix": "{tool}-{backend}-{size}",
+        "params": ["tool", "backend", "message_size", "concurrency"],
+        "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+      },
+      "patterns": [
+        {
+          "id": "p1-ll-fi-pingpong-64b",
+          "pattern_id": "LL-01",
+          "tool": "fi_pingpong",
+          "provider": "efa",
+          "message_size": "64",
+          "message_size_human": "64 B",
+          "iterations": 1000,
+          "node": "both",
+          "description": "EFA ping-pong latency baseline at 64 bytes",
+          "expected": {"latency_us": "5-15"},
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "fi_pingpong-efa-64b",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-fi-pingpong-1kb",
+          "pattern_id": "LL-02",
+          "tool": "fi_pingpong",
+          "provider": "efa",
+          "message_size": "1024",
+          "message_size_human": "1 KB",
+          "iterations": 1000,
+          "node": "both",
+          "description": "EFA ping-pong latency at 1 KB",
+          "expected": {"latency_us": "5-20"},
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "fi_pingpong-efa-1kb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-fi-pingpong-64kb",
+          "pattern_id": "LL-03",
+          "tool": "fi_pingpong",
+          "provider": "efa",
+          "message_size": "65536",
+          "message_size_human": "64 KB",
+          "iterations": 1000,
+          "node": "both",
+          "description": "EFA ping-pong latency at 64 KB",
+          "expected": {"latency_us": "10-50"},
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "fi_pingpong-efa-64kb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-fi-pingpong-1mb",
+          "pattern_id": "LL-04",
+          "tool": "fi_pingpong",
+          "provider": "efa",
+          "message_size": "1048576",
+          "message_size_human": "1 MB",
+          "iterations": 500,
+          "node": "both",
+          "description": "EFA ping-pong latency at 1 MB",
+          "expected": {"latency_us": "50-200"},
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "fi_pingpong-efa-1mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-fi-rdm-pingpong-10mb",
+          "pattern_id": "LL-05",
+          "tool": "fi_rdm_pingpong",
+          "provider": "efa",
+          "message_size": "10485760",
+          "message_size_human": "10 MB",
+          "iterations": 100,
+          "node": "both",
+          "description": "EFA RDM ping-pong latency at 10 MB",
+          "expected": {"latency_us": "200-1000"},
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "fi_rdm_pingpong-efa-10mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-fi-rdm-pingpong-100mb",
+          "pattern_id": "LL-06",
+          "tool": "fi_rdm_pingpong",
+          "provider": "efa",
+          "message_size": "104857600",
+          "message_size_human": "100 MB",
+          "iterations": 50,
+          "node": "both",
+          "description": "EFA RDM ping-pong latency at 100 MB",
+          "expected": {"latency_us": "1000-5000"},
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "fi_rdm_pingpong-efa-100mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-1k-c1",
+          "pattern_id": "LL-07",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 100,
+          "description": "NIXLBench EFA VRAM-to-VRAM 1K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-256mb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-4k-c1",
+          "pattern_id": "LL-08",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "1073741824",
+          "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 50,
+          "description": "NIXLBench EFA VRAM-to-VRAM 4K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-1gb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-12k-c1",
+          "pattern_id": "LL-09",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "3221225472",
+          "message_size_human": "3.0 GB (12K tokens, Qwen2.5-32B)",
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 30,
+          "description": "NIXLBench EFA VRAM-to-VRAM 12K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-3gb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-1k-c1",
+          "pattern_id": "LL-10",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 100,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 1K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-256mb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-4k-c1",
+          "pattern_id": "LL-11",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "1073741824",
+          "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 50,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 4K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-1gb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-12k-c1",
+          "pattern_id": "LL-12",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "3221225472",
+          "message_size_human": "3.0 GB (12K tokens, Qwen2.5-32B)",
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 30,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 12K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-3gb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-1k-c4",
+          "pattern_id": "LL-13",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 4,
+          "scheme": "one_to_one",
+          "iterations": 50,
+          "description": "NIXLBench EFA VRAM-to-VRAM 1K tokens, concurrency=4",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-256mb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-1k-c16",
+          "pattern_id": "LL-14",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 16,
+          "scheme": "one_to_one",
+          "iterations": 50,
+          "description": "NIXLBench EFA VRAM-to-VRAM 1K tokens, concurrency=16",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-256mb-c16",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-1k-c4",
+          "pattern_id": "LL-15",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 4,
+          "scheme": "one_to_one",
+          "iterations": 50,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 1K tokens, concurrency=4",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-256mb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-1k-c16",
+          "pattern_id": "LL-16",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 16,
+          "scheme": "one_to_one",
+          "iterations": 50,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 1K tokens, concurrency=16",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-256mb-c16",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-m2o-1k-c4",
+          "pattern_id": "LL-17",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 4,
+          "scheme": "many_to_one",
+          "iterations": 50,
+          "description": "NIXLBench EFA many-to-one 1K tokens, concurrency=4 (incast pattern)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-m2o-256mb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-m2o-1k-c16",
+          "pattern_id": "LL-18",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 16,
+          "scheme": "many_to_one",
+          "iterations": 50,
+          "description": "NIXLBench EFA many-to-one 1K tokens, concurrency=16 (incast pattern)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-m2o-256mb-c16",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-m2o-1k-c4",
+          "pattern_id": "LL-19",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 4,
+          "scheme": "many_to_one",
+          "iterations": 50,
+          "description": "NIXLBench UCX/TCP many-to-one 1K tokens, concurrency=4 (incast pattern)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-m2o-256mb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-m2o-1k-c16",
+          "pattern_id": "LL-20",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "268435456",
+          "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "num_threads": 16,
+          "scheme": "many_to_one",
+          "iterations": 50,
+          "description": "NIXLBench UCX/TCP many-to-one 1K tokens, concurrency=16 (incast pattern)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-m2o-256mb-c16",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-4k-c4",
+          "pattern_id": "LL-21",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "1073741824",
+          "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "num_threads": 4,
+          "scheme": "one_to_one",
+          "iterations": 30,
+          "description": "NIXLBench EFA VRAM-to-VRAM 4K tokens, concurrency=4",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-1gb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-4k-c16",
+          "pattern_id": "LL-22",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "1073741824",
+          "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "num_threads": 16,
+          "scheme": "one_to_one",
+          "iterations": 30,
+          "description": "NIXLBench EFA VRAM-to-VRAM 4K tokens, concurrency=16",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-1gb-c16",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-4k-c4",
+          "pattern_id": "LL-23",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "1073741824",
+          "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "num_threads": 4,
+          "scheme": "one_to_one",
+          "iterations": 30,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 4K tokens, concurrency=4",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-1gb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-4k-c16",
+          "pattern_id": "LL-24",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "1073741824",
+          "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "num_threads": 16,
+          "scheme": "one_to_one",
+          "iterations": 30,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 4K tokens, concurrency=16",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-1gb-c16",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-kvbench-efa-1k",
+          "pattern_id": "LL-25",
+          "tool": "kvbench",
+          "backend": "Libfabric",
+          "model_config": "qwen2.5-32b",
+          "model_params": {
+            "layers": 64,
+            "kv_heads": 4,
+            "head_dim": 128,
+            "dtype": "bf16"
+          },
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "action": "profile",
+          "description": "KVBench EFA profiling for Qwen2.5-32B at 1K tokens (256 MB KV-Cache)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "kvbench-efa-1k",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-kvbench-efa-4k",
+          "pattern_id": "LL-26",
+          "tool": "kvbench",
+          "backend": "Libfabric",
+          "model_config": "qwen2.5-32b",
+          "model_params": {
+            "layers": 64,
+            "kv_heads": 4,
+            "head_dim": 128,
+            "dtype": "bf16"
+          },
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "action": "profile",
+          "description": "KVBench EFA profiling for Qwen2.5-32B at 4K tokens (1.0 GB KV-Cache)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "kvbench-efa-4k",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-kvbench-efa-12k",
+          "pattern_id": "LL-27",
+          "tool": "kvbench",
+          "backend": "Libfabric",
+          "model_config": "qwen2.5-32b",
+          "model_params": {
+            "layers": 64,
+            "kv_heads": 4,
+            "head_dim": 128,
+            "dtype": "bf16"
+          },
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "action": "profile",
+          "description": "KVBench EFA profiling for Qwen2.5-32B at 12K tokens (3.0 GB KV-Cache)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "kvbench-efa-12k",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-kvbench-ucx-1k",
+          "pattern_id": "LL-28",
+          "tool": "kvbench",
+          "backend": "UCX",
+          "model_config": "qwen2.5-32b",
+          "model_params": {
+            "layers": 64,
+            "kv_heads": 4,
+            "head_dim": 128,
+            "dtype": "bf16"
+          },
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "action": "profile",
+          "description": "KVBench UCX/TCP profiling for Qwen2.5-32B at 1K tokens (256 MB KV-Cache)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "kvbench-ucx-1k",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-kvbench-ucx-4k",
+          "pattern_id": "LL-29",
+          "tool": "kvbench",
+          "backend": "UCX",
+          "model_config": "qwen2.5-32b",
+          "model_params": {
+            "layers": 64,
+            "kv_heads": 4,
+            "head_dim": 128,
+            "dtype": "bf16"
+          },
+          "prompt_tokens": 4096,
+          "prompt_label": "4K",
+          "action": "profile",
+          "description": "KVBench UCX/TCP profiling for Qwen2.5-32B at 4K tokens (1.0 GB KV-Cache)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "kvbench-ucx-4k",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-kvbench-ucx-12k",
+          "pattern_id": "LL-30",
+          "tool": "kvbench",
+          "backend": "UCX",
+          "model_config": "qwen2.5-32b",
+          "model_params": {
+            "layers": 64,
+            "kv_heads": 4,
+            "head_dim": 128,
+            "dtype": "bf16"
+          },
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "action": "profile",
+          "description": "KVBench UCX/TCP profiling for Qwen2.5-32B at 12K tokens (3.0 GB KV-Cache)",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "kvbench-ucx-12k",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-cuda-1mb",
+          "pattern_id": "LL-31",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "cuda",
+          "message_size": "1048576",
+          "message_size_human": "1 MB",
+          "iterations": 100,
+          "description": "UCX tag bandwidth test with CUDA memory at 1 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-cuda-1mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-cuda-10mb",
+          "pattern_id": "LL-32",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "cuda",
+          "message_size": "10485760",
+          "message_size_human": "10 MB",
+          "iterations": 50,
+          "description": "UCX tag bandwidth test with CUDA memory at 10 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-cuda-10mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-cuda-100mb",
+          "pattern_id": "LL-33",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "cuda",
+          "message_size": "104857600",
+          "message_size_human": "100 MB",
+          "iterations": 30,
+          "description": "UCX tag bandwidth test with CUDA memory at 100 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-cuda-100mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-cuda-1gb",
+          "pattern_id": "LL-34",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "cuda",
+          "message_size": "1073741824",
+          "message_size_human": "1 GB",
+          "iterations": 10,
+          "description": "UCX tag bandwidth test with CUDA memory at 1 GB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-cuda-1gb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-lat-cuda-1mb",
+          "pattern_id": "LL-35",
+          "tool": "ucx_perftest",
+          "test_type": "tag_lat",
+          "memory_type": "cuda",
+          "message_size": "1048576",
+          "message_size_human": "1 MB",
+          "iterations": 100,
+          "description": "UCX tag latency test with CUDA memory at 1 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_lat-cuda-1mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-lat-cuda-10mb",
+          "pattern_id": "LL-36",
+          "tool": "ucx_perftest",
+          "test_type": "tag_lat",
+          "memory_type": "cuda",
+          "message_size": "10485760",
+          "message_size_human": "10 MB",
+          "iterations": 50,
+          "description": "UCX tag latency test with CUDA memory at 10 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_lat-cuda-10mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-host-1mb",
+          "pattern_id": "LL-37",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "host",
+          "message_size": "1048576",
+          "message_size_human": "1 MB",
+          "iterations": 100,
+          "description": "UCX tag bandwidth test with host (CPU) memory at 1 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-host-1mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-host-100mb",
+          "pattern_id": "LL-38",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "host",
+          "message_size": "104857600",
+          "message_size_human": "100 MB",
+          "iterations": 30,
+          "description": "UCX tag bandwidth test with host (CPU) memory at 100 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-host-100mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-bw-host-1gb",
+          "pattern_id": "LL-39",
+          "tool": "ucx_perftest",
+          "test_type": "tag_bw",
+          "memory_type": "host",
+          "message_size": "1073741824",
+          "message_size_human": "1 GB",
+          "iterations": 10,
+          "description": "UCX tag bandwidth test with host (CPU) memory at 1 GB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_bw-host-1gb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-ucx-tag-lat-host-1mb",
+          "pattern_id": "LL-40",
+          "tool": "ucx_perftest",
+          "test_type": "tag_lat",
+          "memory_type": "host",
+          "message_size": "1048576",
+          "message_size_human": "1 MB",
+          "iterations": 100,
+          "description": "UCX tag latency test with host (CPU) memory at 1 MB",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "ucx_perftest-tag_lat-host-1mb",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        }
+      ]
+    }
+  ],
+  "execution_order": [
+    {
+      "step": 1,
+      "layer": "L0-Baseline",
+      "patterns": ["p1-baseline-fi-info"],
+      "description": "EFA device verification (prerequisite check)"
+    },
+    {
+      "step": 2,
+      "layer": "L0-Baseline",
+      "patterns": ["p1-baseline-iperf3", "p1-baseline-fi-rdm-pingpong", "p1-baseline-fi-rdm-bw", "p1-baseline-nvidia-smi-basic", "p1-baseline-nvidia-smi-topo", "p1-baseline-nccl-test"],
+      "description": "Network and GPU baseline measurements (parallel execution possible)"
+    },
+    {
+      "step": 3,
+      "layer": "L1-Unified",
+      "patterns": ["p1-unified-*"],
+      "description": "Unified mode (single node) - TPOT/TTFT/Throughput baseline"
+    },
+    {
+      "step": 4,
+      "layer": ["L2-EFA", "L3-TCP"],
+      "patterns": ["p1-efa-*-c1", "p1-tcp-*-c1"],
+      "description": "Disaggregated c=1 measurements (EFA and TCP, parallel execution possible)"
+    },
+    {
+      "step": 5,
+      "layer": ["L2-EFA", "L3-TCP"],
+      "patterns": ["p1-efa-*-c4", "p1-efa-*-c8", "p1-efa-*-c16", "p1-tcp-*-c4", "p1-tcp-*-c8", "p1-tcp-*-c16"],
+      "description": "Disaggregated concurrency sweep (c=4,8,16)"
+    },
+    {
+      "step": 6,
+      "layer": "L5-LowLevel",
+      "patterns": ["p1-ll-fi-pingpong-*", "p1-ll-fi-rdm-pingpong-*"],
+      "description": "Low-level EFA latency baseline: fi_pingpong and fi_rdm_pingpong (LL-01 to LL-06)"
+    },
+    {
+      "step": 7,
+      "layer": "L5-LowLevel",
+      "patterns": ["p1-ll-nixlbench-*-c1"],
+      "description": "NIXLBench one_to_one c=1: EFA and UCX at 1K/4K/12K tokens (LL-07 to LL-12)"
+    },
+    {
+      "step": 8,
+      "layer": "L5-LowLevel",
+      "patterns": ["p1-ll-nixlbench-*-c4", "p1-ll-nixlbench-*-c16", "p1-ll-nixlbench-*-m2o-*"],
+      "description": "NIXLBench concurrency and many_to_one sweeps (LL-13 to LL-24)"
+    },
+    {
+      "step": 9,
+      "layer": "L5-LowLevel",
+      "patterns": ["p1-ll-kvbench-*"],
+      "description": "KVBench LLM-aware profiling: Qwen2.5-32B EFA and UCX (LL-25 to LL-30)"
+    },
+    {
+      "step": 10,
+      "layer": "L5-LowLevel",
+      "patterns": ["p1-ll-ucx-*"],
+      "description": "ucx_perftest bandwidth and latency: cuda and host memory (LL-31 to LL-40)"
+    },
+    {
+      "step": 11,
+      "layer": "L4-Analysis",
+      "patterns": ["p1-analysis-*"],
+      "description": "Cross-validation: TPOT separation, bimodality detection, Proxy overhead"
+    }
+  ],
+  "analysis_plan": {
+    "cross_experiment_comparisons": [
+      {
+        "comparison_id": "CMP-01",
+        "name": "EFA vs TCP at 1K-32K",
+        "layers": ["L2-EFA", "L3-TCP"],
+        "hypothesis": "EFA vs TCP TPOT diff ~8-11ms due to kv_buffer_device (cuda vs cpu). TTFT diff <3ms at 1K-12K.",
+        "metrics": ["tpot_p50_ms", "ttft_p50_ms", "throughput_tok_per_sec"]
+      },
+      {
+        "comparison_id": "CMP-02",
+        "name": "EFA vs TCP at 64K-128K",
+        "layers": ["L2-EFA", "L3-TCP"],
+        "hypothesis": "KV-Cache 16-33GB makes EFA superiority pronounced. TTFT diff 100-500ms at 128K.",
+        "metrics": ["ttft_p50_ms", "kv_transfer_time_ms"]
+      },
+      {
+        "comparison_id": "CMP-03",
+        "name": "Unified vs Disaggregated TPOT",
+        "layers": ["L1-Unified", "L2-EFA", "L3-TCP"],
+        "hypothesis": "unified TPOT ~= EFA TPOT (diff <2ms). TCP TPOT higher due to kv_buffer_device=cpu.",
+        "metrics": ["tpot_p50_ms", "tpot_stdev_ms"]
+      },
+      {
+        "comparison_id": "CMP-04",
+        "name": "Unified vs Disaggregated TTFT (KV-Cache transfer cost)",
+        "layers": ["L1-Unified", "L2-EFA"],
+        "hypothesis": "TTFT diff = KV-Cache transfer + Proxy overhead + NIXL protocol overhead. Linear with prompt length.",
+        "metrics": ["ttft_p50_ms", "ttft_diff_ms"]
+      },
+      {
+        "comparison_id": "CMP-05",
+        "name": "Baseline bandwidth vs actual KV-Cache transfer",
+        "layers": ["L0-Baseline", "L2-EFA"],
+        "hypothesis": "Actual KV-Cache transfer utilizes 30-50% of raw EFA bandwidth due to protocol overhead.",
+        "metrics": ["bandwidth_gbps", "kv_transfer_time_ms"]
+      },
+      {
+        "comparison_id": "CMP-06",
+        "name": "TPOT decomposition (GPU compute vs batch wait)",
+        "layers": ["L1-Unified", "L2-EFA"],
+        "hypothesis": "At c>=2, ITL shows bimodal distribution. GPU compute ratio decreases from ~100% (c=1) to ~69% (c=16).",
+        "metrics": ["gpu_compute_time_ms", "batch_wait_time_ms", "gpu_compute_ratio"]
+      },
+      {
+        "comparison_id": "CMP-07",
+        "name": "NIXLBench EFA vs UCX transfer time",
+        "layers": ["L5-LowLevel"],
+        "hypothesis": "EFA (Libfabric) achieves 3-5x lower transfer time than UCX/TCP for same KV-Cache size due to RDMA zero-copy.",
+        "metrics": ["transfer_time_ms", "bandwidth_gbps"]
+      },
+      {
+        "comparison_id": "CMP-08",
+        "name": "NIXLBench direct vs E2E KV-Cache transfer",
+        "layers": ["L5-LowLevel", "L2-EFA", "L3-TCP"],
+        "hypothesis": "NIXLBench direct transfer accounts for 60-80% of E2E TTFT overhead. Remaining gap = NIXL protocol + vLLM scheduling + Proxy.",
+        "metrics": ["transfer_time_ms", "ttft_p50_ms"]
+      },
+      {
+        "comparison_id": "CMP-09",
+        "name": "ucx_perftest cuda vs host memory bandwidth",
+        "layers": ["L5-LowLevel"],
+        "hypothesis": "CUDA memory achieves higher bandwidth than host memory due to GPUDirect RDMA bypass of CPU. Difference most pronounced at large sizes (100MB+).",
+        "metrics": ["bandwidth_gbps", "latency_us"]
+      },
+      {
+        "comparison_id": "CMP-10",
+        "name": "KVBench profiling vs theoretical KV-Cache transfer time",
+        "layers": ["L5-LowLevel", "L0-Baseline"],
+        "hypothesis": "KVBench measures actual layer-by-layer transfer overhead. Total time exceeds theoretical (size/bandwidth) by 2-5x due to MR registration, protocol overhead.",
+        "metrics": ["transfer_time_ms", "bandwidth_gbps"]
+      }
+    ]
+  },
+  "task_definition_paths": {
+    "baseline": "task-definitions/phase1/baseline/",
+    "producer": "task-definitions/phase1/producer/",
+    "consumer": "task-definitions/phase1/consumer/",
+    "analysis": "task-definitions/phase1/analysis/",
+    "low_level": "task-definitions/phase1/low-level/"
+  },
+  "generate_tasks_script": "task-definitions/phase1/generate_tasks.py"
+}

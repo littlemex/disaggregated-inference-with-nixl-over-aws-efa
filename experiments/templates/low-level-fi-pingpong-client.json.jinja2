@@ -32,7 +32,7 @@
       "description": "Run {{ tool }} client connecting to server on NODE1, measure latency/bandwidth",
       "commands": [
         "if [ -z \"$NODE1_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE not set'; exit 1; fi",
-        "RESULTS_JSON='{\"tool\": \"{{ tool }}\", \"provider\": \"{{ provider }}\", \"pattern_id\": \"{{ pattern_id }}\", \"timestamp\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\", \"results\": ['",
+        "RESULTS_JSON='{\"tool\": \"{{ tool }}\", \"provider\": \"{{ provider }}\", \"pattern_id\": \"{{ pattern_id }}\", \"phase\": \"{{ phase | default('low-level') }}\", \"model\": \"{{ infrastructure.model | default('') }}\", \"model_size\": \"{{ infrastructure.model_size | default('') }}\", \"instance_type\": \"{{ infrastructure.instance_type | default('') }}\", \"timestamp\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\", \"results\": ['",
         "FIRST=true",
 {% for size in message_sizes %}
         "echo '[INFO] === Message size: {{ size }} ({{ loop.index }}/{{ message_sizes|length }}) ==='",

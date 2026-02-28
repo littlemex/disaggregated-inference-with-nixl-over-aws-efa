@@ -256,6 +256,10 @@ export class NixlEfaStack extends Stack {
     });
 
     // --- User Data ---
+    // NOTE: NIXL (pip install 'nixl[cu12]') is NOT installed here.
+    // NIXL installation is handled by experiment-specific setup scripts
+    // (e.g., experiments/task-definitions/phase16/setup-v0.16.0-environment.json)
+    // to ensure correct version compatibility with vLLM.
     const userData = ec2.UserData.forLinux();
     if (mlflowTrackingServerArn) {
       userData.addCommands(

@@ -115,12 +115,13 @@ def compute_derived_values(merged: dict, infrastructure: dict) -> dict:
 
 
 # Low-level tools that require dual-node execution (server + client)
-DUAL_NODE_TOOLS = {"fi_pingpong", "fi_rma_pingpong", "nixlbench", "ucx_perftest"}
+DUAL_NODE_TOOLS = {"fi_pingpong", "fi_rma_pingpong", "fi_rdm_pingpong", "nixlbench", "ucx_perftest"}
 
 # Low-level tool to template mapping (single-node tools)
 LOW_LEVEL_TEMPLATE_MAP = {
     "fi_pingpong": "low-level-fi-pingpong.json.jinja2",
     "fi_rma_pingpong": "low-level-fi-pingpong.json.jinja2",
+    "fi_rdm_pingpong": "low-level-fi-pingpong.json.jinja2",
     "nixlbench": "low-level-nixlbench.json.jinja2",
     "kvbench": "low-level-kvbench.json.jinja2",
     "ucx_perftest": "low-level-ucx-perftest.json.jinja2",
@@ -130,6 +131,7 @@ LOW_LEVEL_TEMPLATE_MAP = {
 LOW_LEVEL_SERVER_TEMPLATE_MAP = {
     "fi_pingpong": "low-level-fi-pingpong-server.json.jinja2",
     "fi_rma_pingpong": "low-level-fi-pingpong-server.json.jinja2",
+    "fi_rdm_pingpong": "low-level-fi-pingpong-server.json.jinja2",
     "nixlbench": "low-level-nixlbench-server.json.jinja2",
     "ucx_perftest": "low-level-ucx-perftest-server.json.jinja2",
 }
@@ -137,6 +139,7 @@ LOW_LEVEL_SERVER_TEMPLATE_MAP = {
 LOW_LEVEL_CLIENT_TEMPLATE_MAP = {
     "fi_pingpong": "low-level-fi-pingpong-client.json.jinja2",
     "fi_rma_pingpong": "low-level-fi-pingpong-client.json.jinja2",
+    "fi_rdm_pingpong": "low-level-fi-pingpong-client.json.jinja2",
     "nixlbench": "low-level-nixlbench-client.json.jinja2",
     "ucx_perftest": "low-level-ucx-perftest-client.json.jinja2",
 }
@@ -166,8 +169,10 @@ def generate_task_json(
     # Check if this is a low-level tool pattern
     tool = pattern.get("tool")
     if tool and tool in LOW_LEVEL_TEMPLATE_MAP:
+        low_level_dir = output_dir / "low-level"
+        low_level_dir.mkdir(parents=True, exist_ok=True)
         return _generate_low_level_task(
-            pattern, layer, plan, env, output_dir
+            pattern, layer, plan, env, low_level_dir
         )
 
     # E2E pattern (existing logic)
@@ -246,13 +251,27 @@ def _generate_low_level_task(
         if key != "id":
             merged[key] = value
 
+    # KV-Cache reference (needed for bytes_per_token in templates)
+    kv_cache_ref = plan.get("kv_cache_reference", {})
+
+    # Model params for KVBench (from pattern or plan defaults)
+    if tool == "kvbench" and "model_params" not in merged:
+        # Derive model_params from kv_cache_reference comment if available
+        pass
+
     template_vars = {
         "pattern_id": pattern_id,
+        "phase": plan.get("phase", "low-level"),
         "infrastructure": infrastructure,
+        "kv_cache_reference": kv_cache_ref,
         "layer_name": layer.get("name", ""),
         "layer_priority": layer.get("priority", "P0"),
         **merged,
     }
+
+    # Ensure bytes_per_token is available for KVBench
+    if "bytes_per_token" not in template_vars:
+        template_vars["bytes_per_token"] = kv_cache_ref.get("bytes_per_token", 57344)
 
     if tool in DUAL_NODE_TOOLS:
         # Generate server + client pair for dual-node execution
@@ -347,10 +366,13 @@ def main():
     output_dir = SCRIPT_DIR / "task-definitions" / phase_name
     consumer_dir = output_dir / "consumer"
 
+    low_level_dir = output_dir / "low-level"
+
     if args.dry_run:
         print("[DRY-RUN] Would create directories:")
         print(f"  {output_dir}")
         print(f"  {consumer_dir}")
+        print(f"  {low_level_dir}")
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
         consumer_dir.mkdir(parents=True, exist_ok=True)
@@ -396,6 +418,8 @@ def main():
     if not args.dry_run:
         print(f"[INFO] Output: {output_dir}")
         print(f"[INFO] Consumer: {consumer_dir}")
+        if low_level_dir.exists():
+            print(f"[INFO] Low-level: {low_level_dir}")
     print()
     print("[NEXT STEPS]")
     print(f"  1. Review generated JSON files in task-definitions/{phase_name}/")
