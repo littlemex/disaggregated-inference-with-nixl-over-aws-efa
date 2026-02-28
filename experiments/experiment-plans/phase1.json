@@ -19,7 +19,7 @@
   },
   "common_settings": {
     "max_tokens": 128,
-    "warmup_iterations": 5,
+    "warmup_iterations": 10,
     "measurement_iterations": 30,
     "gpu_memory_utilization": 0.9,
     "max_num_batched_tokens": 4096,
@@ -253,6 +253,100 @@
           "prompt_label": "32K",
           "concurrency": 16,
           "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-1k-c8",
+          "mode": "unified",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-1k-c16",
+          "mode": "unified",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-12k-c4",
+          "mode": "unified",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-12k-c8",
+          "mode": "unified",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-12k-c16",
+          "mode": "unified",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-64k-c4",
+          "mode": "unified",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-64k-c8",
+          "mode": "unified",
+          "prompt_tokens": 65536,
+          "prompt_label": "64K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-100k-c4",
+          "mode": "unified",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-100k-c8",
+          "mode": "unified",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-128k-c4",
+          "mode": "unified",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-unified-128k-c8",
+          "mode": "unified",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
         }
       ]
     },
@@ -425,6 +519,84 @@
           "concurrency": 8,
           "requires_yarn": true,
           "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-128k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-1k-c8",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-1k-c16",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-12k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-12k-c8",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-12k-c16",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-100k-c4",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-efa-100k-c8",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "_comment": "128K c=8 is skipped due to OOM risk (KV-Cache: 65.6GB > L40S 48GB with 8 concurrent requests)"
         }
       ]
     },
@@ -598,6 +770,84 @@
           "concurrency": 8,
           "requires_yarn": true,
           "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-128k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 131072,
+          "prompt_label": "128K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-1k-c8",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-1k-c16",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 1024,
+          "prompt_label": "1K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-12k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 4,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-12k-c8",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 8,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-12k-c16",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 16,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-100k-c4",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 4,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "id": "p1-tcp-100k-c8",
+          "mode": "disaggregated",
+          "transport": "tcp",
+          "prompt_tokens": 102400,
+          "prompt_label": "100K",
+          "concurrency": 8,
+          "requires_yarn": true,
+          "metrics": ["TPOT", "TTFT", "Throughput"]
+        },
+        {
+          "_comment": "128K c=8 is skipped due to OOM risk (KV-Cache: 65.6GB > L40S 48GB with 8 concurrent requests)"
         }
       ]
     },
@@ -765,6 +1015,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 1,
           "scheme": "one_to_one",
           "iterations": 100,
@@ -785,6 +1036,7 @@
           "target_seg_type": "VRAM",
           "message_size": "1073741824",
           "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 4096,
           "num_threads": 1,
           "scheme": "one_to_one",
           "iterations": 50,
@@ -805,6 +1057,7 @@
           "target_seg_type": "VRAM",
           "message_size": "3221225472",
           "message_size_human": "3.0 GB (12K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 12288,
           "num_threads": 1,
           "scheme": "one_to_one",
           "iterations": 30,
@@ -825,6 +1078,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 1,
           "scheme": "one_to_one",
           "iterations": 100,
@@ -845,6 +1099,7 @@
           "target_seg_type": "VRAM",
           "message_size": "1073741824",
           "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 4096,
           "num_threads": 1,
           "scheme": "one_to_one",
           "iterations": 50,
@@ -865,6 +1120,7 @@
           "target_seg_type": "VRAM",
           "message_size": "3221225472",
           "message_size_human": "3.0 GB (12K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 12288,
           "num_threads": 1,
           "scheme": "one_to_one",
           "iterations": 30,
@@ -885,6 +1141,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 4,
           "scheme": "one_to_one",
           "iterations": 50,
@@ -905,6 +1162,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 16,
           "scheme": "one_to_one",
           "iterations": 50,
@@ -925,6 +1183,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 4,
           "scheme": "one_to_one",
           "iterations": 50,
@@ -945,6 +1204,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 16,
           "scheme": "one_to_one",
           "iterations": 50,
@@ -965,6 +1225,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 4,
           "scheme": "many_to_one",
           "iterations": 50,
@@ -985,6 +1246,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 16,
           "scheme": "many_to_one",
           "iterations": 50,
@@ -1005,6 +1267,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 4,
           "scheme": "many_to_one",
           "iterations": 50,
@@ -1025,6 +1288,7 @@
           "target_seg_type": "VRAM",
           "message_size": "268435456",
           "message_size_human": "256 MB (1K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 1024,
           "num_threads": 16,
           "scheme": "many_to_one",
           "iterations": 50,
@@ -1045,6 +1309,7 @@
           "target_seg_type": "VRAM",
           "message_size": "1073741824",
           "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 4096,
           "num_threads": 4,
           "scheme": "one_to_one",
           "iterations": 30,
@@ -1065,6 +1330,7 @@
           "target_seg_type": "VRAM",
           "message_size": "1073741824",
           "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 4096,
           "num_threads": 16,
           "scheme": "one_to_one",
           "iterations": 30,
@@ -1085,6 +1351,7 @@
           "target_seg_type": "VRAM",
           "message_size": "1073741824",
           "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 4096,
           "num_threads": 4,
           "scheme": "one_to_one",
           "iterations": 30,
@@ -1105,6 +1372,7 @@
           "target_seg_type": "VRAM",
           "message_size": "1073741824",
           "message_size_human": "1.0 GB (4K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 4096,
           "num_threads": 16,
           "scheme": "one_to_one",
           "iterations": 30,
@@ -1124,7 +1392,7 @@
           "model_config": "qwen2.5-32b",
           "model_params": {
             "layers": 64,
-            "kv_heads": 4,
+            "kv_heads": 8,
             "head_dim": 128,
             "dtype": "bf16"
           },
@@ -1147,7 +1415,7 @@
           "model_config": "qwen2.5-32b",
           "model_params": {
             "layers": 64,
-            "kv_heads": 4,
+            "kv_heads": 8,
             "head_dim": 128,
             "dtype": "bf16"
           },
@@ -1170,7 +1438,7 @@
           "model_config": "qwen2.5-32b",
           "model_params": {
             "layers": 64,
-            "kv_heads": 4,
+            "kv_heads": 8,
             "head_dim": 128,
             "dtype": "bf16"
           },
@@ -1193,7 +1461,7 @@
           "model_config": "qwen2.5-32b",
           "model_params": {
             "layers": 64,
-            "kv_heads": 4,
+            "kv_heads": 8,
             "head_dim": 128,
             "dtype": "bf16"
           },
@@ -1216,7 +1484,7 @@
           "model_config": "qwen2.5-32b",
           "model_params": {
             "layers": 64,
-            "kv_heads": 4,
+            "kv_heads": 8,
             "head_dim": 128,
             "dtype": "bf16"
           },
@@ -1239,7 +1507,7 @@
           "model_config": "qwen2.5-32b",
           "model_params": {
             "layers": 64,
-            "kv_heads": 4,
+            "kv_heads": 8,
             "head_dim": 128,
             "dtype": "bf16"
           },
@@ -1423,6 +1691,90 @@
             "params": ["tool", "backend", "message_size", "concurrency"],
             "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
           }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-32k-c1",
+          "pattern_id": "LL-41",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "8589934592",
+          "message_size_human": "8.0 GB (32K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 32768,
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 20,
+          "description": "NIXLBench EFA VRAM-to-VRAM 32K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-8gb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-efa-32k-c4",
+          "pattern_id": "LL-42",
+          "tool": "nixlbench",
+          "backend": "Libfabric",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "8589934592",
+          "message_size_human": "8.0 GB (32K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 32768,
+          "num_threads": 4,
+          "scheme": "one_to_one",
+          "iterations": 20,
+          "description": "NIXLBench EFA VRAM-to-VRAM 32K tokens, concurrency=4",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-efa-8gb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-32k-c1",
+          "pattern_id": "LL-43",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "8589934592",
+          "message_size_human": "8.0 GB (32K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 32768,
+          "num_threads": 1,
+          "scheme": "one_to_one",
+          "iterations": 20,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 32K tokens, concurrency=1",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-8gb-c1",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
+        },
+        {
+          "id": "p1-ll-nixlbench-ucx-32k-c4",
+          "pattern_id": "LL-44",
+          "tool": "nixlbench",
+          "backend": "UCX",
+          "initiator_seg_type": "VRAM",
+          "target_seg_type": "VRAM",
+          "message_size": "8589934592",
+          "message_size_human": "8.0 GB (32K tokens, Qwen2.5-32B)",
+          "kv_cache_equivalent_tokens": 32768,
+          "num_threads": 4,
+          "scheme": "one_to_one",
+          "iterations": 20,
+          "description": "NIXLBench UCX/TCP VRAM-to-VRAM 32K tokens, concurrency=4",
+          "mlflow_config": {
+            "experiment_name": "phase1-low-level",
+            "run_name_prefix": "nixlbench-ucx-8gb-c4",
+            "params": ["tool", "backend", "message_size", "concurrency"],
+            "metrics": ["latency_us", "bandwidth_gbps", "transfer_time_ms"]
+          }
         }
       ]
     }
@@ -1437,7 +1789,7 @@
     {
       "step": 2,
       "layer": "L0-Baseline",
-      "patterns": ["p1-baseline-iperf3", "p1-baseline-fi-rdm-pingpong", "p1-baseline-fi-rdm-bw", "p1-baseline-nvidia-smi-basic", "p1-baseline-nvidia-smi-topo", "p1-baseline-nccl-test"],
+      "patterns": ["p1-baseline-iperf3", "p1-baseline-fi-rdm-pingpong", "p1-baseline-fi-rdm-bw", "p1-baseline-nvidia-smi-basic", "p1-baseline-nvidia-smi-topo", "p1-baseline-nvidia-smi-dmon", "p1-baseline-nccl-test"],
       "description": "Network and GPU baseline measurements (parallel execution possible)"
     },
     {
@@ -1468,13 +1820,13 @@
       "step": 7,
       "layer": "L5-LowLevel",
       "patterns": ["p1-ll-nixlbench-*-c1"],
-      "description": "NIXLBench one_to_one c=1: EFA and UCX at 1K/4K/12K tokens (LL-07 to LL-12)"
+      "description": "NIXLBench one_to_one c=1: EFA and UCX at 1K/4K/12K/32K tokens (LL-07 to LL-12, LL-41, LL-43)"
     },
     {
       "step": 8,
       "layer": "L5-LowLevel",
       "patterns": ["p1-ll-nixlbench-*-c4", "p1-ll-nixlbench-*-c16", "p1-ll-nixlbench-*-m2o-*"],
-      "description": "NIXLBench concurrency and many_to_one sweeps (LL-13 to LL-24)"
+      "description": "NIXLBench concurrency and many_to_one sweeps (LL-13 to LL-24, LL-42, LL-44)"
     },
     {
       "step": 9,
@@ -1502,28 +1854,28 @@
         "name": "EFA vs TCP at 1K-32K",
         "layers": ["L2-EFA", "L3-TCP"],
         "hypothesis": "EFA vs TCP TPOT diff ~8-11ms due to kv_buffer_device (cuda vs cpu). TTFT diff <3ms at 1K-12K.",
-        "metrics": ["tpot_p50_ms", "ttft_p50_ms", "throughput_tok_per_sec"]
+        "metrics": ["tpot_median_ms", "ttft_median_ms", "throughput_tok_per_sec_mean"]
       },
       {
         "comparison_id": "CMP-02",
         "name": "EFA vs TCP at 64K-128K",
         "layers": ["L2-EFA", "L3-TCP"],
         "hypothesis": "KV-Cache 16-33GB makes EFA superiority pronounced. TTFT diff 100-500ms at 128K.",
-        "metrics": ["ttft_p50_ms", "kv_transfer_time_ms"]
+        "metrics": ["ttft_median_ms", "kv_transfer_time_ms"]
       },
       {
         "comparison_id": "CMP-03",
         "name": "Unified vs Disaggregated TPOT",
         "layers": ["L1-Unified", "L2-EFA", "L3-TCP"],
         "hypothesis": "unified TPOT ~= EFA TPOT (diff <2ms). TCP TPOT higher due to kv_buffer_device=cpu.",
-        "metrics": ["tpot_p50_ms", "tpot_stdev_ms"]
+        "metrics": ["tpot_median_ms", "tpot_stdev_ms"]
       },
       {
         "comparison_id": "CMP-04",
         "name": "Unified vs Disaggregated TTFT (KV-Cache transfer cost)",
         "layers": ["L1-Unified", "L2-EFA"],
         "hypothesis": "TTFT diff = KV-Cache transfer + Proxy overhead + NIXL protocol overhead. Linear with prompt length.",
-        "metrics": ["ttft_p50_ms", "ttft_diff_ms"]
+        "metrics": ["ttft_median_ms", "ttft_diff_ms"]
       },
       {
         "comparison_id": "CMP-05",
@@ -1551,7 +1903,7 @@
         "name": "NIXLBench direct vs E2E KV-Cache transfer",
         "layers": ["L5-LowLevel", "L2-EFA", "L3-TCP"],
         "hypothesis": "NIXLBench direct transfer accounts for 60-80% of E2E TTFT overhead. Remaining gap = NIXL protocol + vLLM scheduling + Proxy.",
-        "metrics": ["transfer_time_ms", "ttft_p50_ms"]
+        "metrics": ["transfer_time_ms", "ttft_median_ms"]
       },
       {
         "comparison_id": "CMP-09",
