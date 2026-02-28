@@ -1,0 +1,41 @@
+{
+  "name": "Phase {{ phase }}: {{ pattern_id }} Analysis",
+  "description": "{{ description }}",
+  "variables": {
+    "VENV_PATH": "{{ infrastructure.venv_path if infrastructure.venv_path is defined else '' }}",
+    "ANALYSIS_SCRIPT": "/tmp/{{ pattern_id }}.py",
+    "OUTPUT_FILE": "/tmp/{{ pattern_id }}.json",
+    "LOG_FILE": "/tmp/{{ pattern_id }}.log",
+    "PHASE": "{{ phase }}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-analysis-script",
+      "name": "Verify Analysis Script",
+      "description": "Verify analysis script exists",
+      "commands": [
+        "if [ ! -f {{"{{ANALYSIS_SCRIPT}}"}} ]; then echo '[ERROR] Analysis script not found: {{"{{ANALYSIS_SCRIPT}}"}}'; exit 1; fi",
+        "echo '[OK] Analysis script found'"
+      ]
+    },
+    {
+      "id": "02-run-analysis",
+      "name": "Run {{ pattern_id }} Analysis",
+      "description": "{{ description }}",
+      "commands": [
+        "python3 {{"{{ANALYSIS_SCRIPT}}"}} --output {{"{{OUTPUT_FILE}}"}} > {{"{{LOG_FILE}}"}} 2>&1",
+        "echo '[OK] Analysis complete: {{"{{OUTPUT_FILE}}"}}'"
+      ]
+    },
+    {
+      "id": "03-display-results",
+      "name": "Display Analysis Results",
+      "description": "Display analysis results summary",
+      "commands": [
+        "echo '--- Analysis Results ---'",
+        "cat {{"{{OUTPUT_FILE}}"}} | head -50 || echo '[INFO] Results file not found'",
+        "echo '--- End Results ---'"
+      ]
+    }
+  ]
+}

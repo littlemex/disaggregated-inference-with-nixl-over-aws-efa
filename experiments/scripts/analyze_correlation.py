@@ -434,8 +434,8 @@ def analyze_token_gap(
     result = CorrelationResult(analysis_name="12K Token 7.31x Gap Decomposition")
 
     # Theoretical values
-    # Qwen2.5-7B: 57,344 bytes/token, 12K tokens = 672 MB
-    kv_cache_12k = 12288 * 57344  # ~704 MB
+    # Qwen2.5-32B: 262,144 bytes/token, 12K tokens = ~3.2 GB
+    kv_cache_12k = 12288 * 262144  # ~3.22 GB
     theoretical_efa_gbps = 4.4
     theoretical_tcp_gbps = 2.9
     theoretical_efa_ms = (kv_cache_12k / (theoretical_efa_gbps * 1e9)) * 1000

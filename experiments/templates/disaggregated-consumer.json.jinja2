@@ -34,9 +34,8 @@
       "skip_if": "pgrep -f 'vllm.entrypoints.openai.api_server.*kv_consumer' > /dev/null && curl -s http://localhost:{{"{{"}}PORT{{"}}"}}/health | grep -q ok",
       "commands": [
         "if [ -z \"$NODE2_PRIVATE\" ]; then echo '[ERROR] NODE2_PRIVATE not set'; exit 1; fi",
-        "source {{"{{"}}VENV_PATH{{"}}"}}/bin/activate",
 {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}
-        "export NCCL_DEBUG=INFO",
+        "export NCCL_DEBUG=WARN",
         "export NCCL_IB_DISABLE=0",
 {% endif %}
 {% if backend == 'efa' %}
@@ -44,13 +43,15 @@
         "export FI_PROVIDER=efa",
         "export FI_EFA_FORK_SAFE=1",
         "export FI_EFA_USE_DEVICE_RDMA=1",
+        "export FI_LOG_LEVEL=warn",
 {% elif backend == 'tcp' %}
         "export NIXL_BACKEND=TCP",
 {% else %}
         "export NIXL_BACKEND=UCX",
 {% endif %}
+        "export NIXL_LOG_LEVEL=INFO",
         "export VLLM_NIXL_SIDE_CHANNEL_HOST=$NODE2_PRIVATE",
-        "nohup python -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{ tp_per_node }} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_consumer\",\"kv_rank\":1,\"kv_parallel_size\":2,\"kv_buffer_device\":\"cuda\",\"kv_buffer_size\":{{ kv_buffer_size }},\"backends\":[\"{% if backend == 'efa' %}LIBFABRIC{% elif backend == 'tcp' %}TCP{% else %}UCX{% endif %}\"]}' > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
+        "nohup {{"{{"}}VENV_PATH{{"}}"}}/bin/python3 -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{ tp_per_node }} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_consumer\",\"kv_rank\":1,\"kv_parallel_size\":2,\"kv_buffer_device\":\"{% if backend == 'tcp' %}cpu{% else %}cuda{% endif %}\",\"kv_buffer_size\":{{ kv_buffer_size }},\"kv_connector_extra_config\":{\"backends\":[\"{% if backend == 'efa' %}LIBFABRIC{% elif backend == 'tcp' %}TCP{% else %}UCX{% endif %}\"]}}' > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
         "echo $! > {{"{{"}}PID_FILE{{"}}"}}",
         "echo '[OK] {{ backend|upper }} Consumer started ({{ 'Prefix Cache ON' if prefix_cache else 'Prefix Cache OFF' }})'"
       ]
@@ -70,6 +71,17 @@
       "description": "Verify Consumer server is ready",
       "commands": [
         "for i in $(seq 1 120); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo '[OK] Consumer server ready'; exit 0; fi; [ $((i % 20)) -eq 0 ] && echo '[INFO] Waiting... ('$i'/120)'; sleep 1; done; echo '[ERROR] Consumer health check timeout'; cat {{"{{"}}LOG_FILE{{"}}"}} | tail -50; exit 1"
+      ]
+    },
+    {
+      "id": "04b-verify-nixl-backend",
+      "name": "Verify NIXL Backend",
+      "description": "Verify NIXL backend initialization from logs",
+      "commands": [
+        "echo '[INFO] Verifying NIXL backend initialization...'",
+        "sleep 10",
+        "grep -i 'nixl\\|backend\\|LIBFABRIC' {{"{{"}}LOG_FILE{{"}}"}} | tail -20 || echo '[WARNING] No NIXL backend info found in logs'",
+        "echo '[OK] Backend verification complete'"
       ]
     }
   ]

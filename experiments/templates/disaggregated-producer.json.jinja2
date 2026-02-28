@@ -58,9 +58,8 @@
       "skip_if": "pgrep -f 'vllm.entrypoints.openai.api_server.*kv_producer' > /dev/null && curl -s http://localhost:{{"{{"}}PORT{{"}}"}}/health | grep -q ok",
       "commands": [
         "if [ -z \"$NODE1_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE not set'; exit 1; fi",
-        "source {{"{{"}}VENV_PATH{{"}}"}}/bin/activate",
 {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}
-        "export NCCL_DEBUG=INFO",
+        "export NCCL_DEBUG=WARN",
         "export NCCL_IB_DISABLE=0",
 {% endif %}
 {% if backend == 'efa' %}
@@ -68,13 +67,15 @@
         "export FI_PROVIDER=efa",
         "export FI_EFA_FORK_SAFE=1",
         "export FI_EFA_USE_DEVICE_RDMA=1",
+        "export FI_LOG_LEVEL=warn",
 {% elif backend == 'tcp' %}
         "export NIXL_BACKEND=TCP",
 {% else %}
         "export NIXL_BACKEND=UCX",
 {% endif %}
+        "export NIXL_LOG_LEVEL=INFO",
         "export VLLM_NIXL_SIDE_CHANNEL_HOST=$NODE1_PRIVATE",
-        "nohup python -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{ tp_per_node }} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_producer\",\"kv_rank\":0,\"kv_parallel_size\":2,\"kv_buffer_device\":\"cuda\",\"kv_buffer_size\":{{ kv_buffer_size }},\"backends\":[\"{% if backend == 'efa' %}LIBFABRIC{% elif backend == 'tcp' %}TCP{% else %}UCX{% endif %}\"]}' > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
+        "nohup {{"{{"}}VENV_PATH{{"}}"}}/bin/python3 -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{ tp_per_node }} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_producer\",\"kv_rank\":0,\"kv_parallel_size\":2,\"kv_buffer_device\":\"{% if backend == 'tcp' %}cpu{% else %}cuda{% endif %}\",\"kv_buffer_size\":{{ kv_buffer_size }},\"kv_connector_extra_config\":{\"backends\":[\"{% if backend == 'efa' %}LIBFABRIC{% elif backend == 'tcp' %}TCP{% else %}UCX{% endif %}\"]}}' > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
         "echo $! > {{"{{"}}PID_FILE{{"}}"}}",
         "echo '[OK] {{ backend|upper }} Producer started ({{ 'Prefix Cache ON' if prefix_cache else 'Prefix Cache OFF' }})'"
       ]
@@ -97,14 +98,24 @@
       ]
     },
     {
+      "id": "05b-verify-nixl-backend",
+      "name": "Verify NIXL Backend",
+      "description": "Verify NIXL backend initialization from logs",
+      "commands": [
+        "echo '[INFO] Verifying NIXL backend initialization...'",
+        "sleep 10",
+        "grep -i 'nixl\\|backend\\|LIBFABRIC' {{"{{"}}LOG_FILE{{"}}"}} | tail -20 || echo '[WARNING] No NIXL backend info found in logs'",
+        "echo '[OK] Backend verification complete'"
+      ]
+    },
+    {
       "id": "06-start-proxy",
       "name": "Start Disaggregated Proxy Server",
       "description": "Start Proxy server (Prefill -> Decode request routing)",
       "skip_if": "curl -s http://localhost:{{"{{"}}PROXY_PORT{{"}}"}}/health | grep -q healthy",
       "commands": [
         "if [ -z \"$NODE1_PRIVATE\" ] || [ -z \"$NODE2_PRIVATE\" ]; then echo '[ERROR] NODE1_PRIVATE and NODE2_PRIVATE must be set'; exit 1; fi",
-        "source {{"{{"}}VENV_PATH{{"}}"}}/bin/activate",
-        "nohup python3 {{"{{"}}PROXY_SCRIPT{{"}}"}} --prefill-url http://$NODE1_PRIVATE:{{"{{"}}PORT{{"}}"}} --decode-url http://$NODE2_PRIVATE:{{"{{"}}CONSUMER_PORT{{"}}"}} --port {{"{{"}}PROXY_PORT{{"}}"}} > {{"{{"}}PROXY_LOG_FILE{{"}}"}} 2>&1 &",
+        "nohup {{"{{"}}VENV_PATH{{"}}"}}/bin/python3 {{"{{"}}PROXY_SCRIPT{{"}}"}} --prefill-url http://$NODE1_PRIVATE:{{"{{"}}PORT{{"}}"}} --decode-url http://$NODE2_PRIVATE:{{"{{"}}CONSUMER_PORT{{"}}"}} --port {{"{{"}}PROXY_PORT{{"}}"}} > {{"{{"}}PROXY_LOG_FILE{{"}}"}} 2>&1 &",
         "echo $! > {{"{{"}}PROXY_PID_FILE{{"}}"}}",
         "echo '[OK] Proxy server started on port {{"{{"}}PROXY_PORT{{"}}"}}'",
         "sleep 5"
@@ -123,8 +134,7 @@
       "name": "Run Benchmark ({{ backend|upper }}, {{ prompt_tokens }} tokens, c={{ concurrency }})",
       "description": "Run benchmark (Proxy, warmup={{ warmup_iterations }}, measurement={{ measurement_iterations }}, c={{ concurrency }})",
       "commands": [
-        "source {{"{{"}}VENV_PATH{{"}}"}}/bin/activate",
-        "python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PROXY_PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode disaggregated --backend {{ backend }} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }},backend={{ backend }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
+        "{{"{{"}}VENV_PATH{{"}}"}}/bin/python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PROXY_PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode disaggregated --backend {{ backend }} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }},backend={{ backend }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]
     },

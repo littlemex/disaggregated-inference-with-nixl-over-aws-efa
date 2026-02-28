@@ -151,11 +151,12 @@ def generate_task_json(
     plan: dict,
     env: Environment,
     output_dir: Path,
+    producer_dir: Path,
     consumer_dir: Path,
 ) -> int:
     """Generate JSON task definition(s) for a single pattern.
 
-    Supports both E2E patterns (unified/disaggregated via backend field) and
+    Supports both E2E patterns (unified/disaggregated via mode field) and
     low-level tool patterns (fi_pingpong, nixlbench, kvbench, ucx_perftest
     via tool field).
 
@@ -165,6 +166,13 @@ def generate_task_json(
     phase = plan["phase"]
     infrastructure = plan["infrastructure"]
     common = plan.get("common_settings", {})
+
+    # Check if this is an analysis pattern
+    pattern_type = pattern.get("type")
+    if pattern_type in ["analysis", "measurement"]:
+        return _generate_analysis_task(
+            pattern, layer, plan, env, output_dir
+        )
 
     # Check if this is a low-level tool pattern
     tool = pattern.get("tool")
@@ -176,7 +184,14 @@ def generate_task_json(
         )
 
     # E2E pattern (existing logic)
-    backend = pattern.get("backend", "unified")
+    # Determine mode: use 'mode' field if present, otherwise infer from 'backend'
+    mode = pattern.get("mode", "unified")
+
+    # For disaggregated mode, use 'transport' as backend if 'backend' not explicitly set
+    if mode == "disaggregated":
+        backend = pattern.get("backend") or pattern.get("transport", "efa")
+    else:
+        backend = pattern.get("backend", "unified")
 
     # Merge common settings with pattern overrides
     merged = merge_settings(common, pattern)
@@ -192,7 +207,7 @@ def generate_task_json(
         **merged,
     }
 
-    if backend == "unified":
+    if mode == "unified":
         template = env.get_template("unified.json.jinja2")
         output_path = output_dir / f"{pattern_id}.json"
         content = template.render(**template_vars)
@@ -205,13 +220,13 @@ def generate_task_json(
         template_vars["backend"] = backend
 
         producer_template = env.get_template("disaggregated-producer.json.jinja2")
-        producer_path = output_dir / f"{pattern_id}.json"
+        producer_path = producer_dir / f"{pattern_id}.json"
         content = producer_template.render(**template_vars)
         with open(producer_path, "w", encoding="utf-8") as f:
             f.write(content)
 
         consumer_template = env.get_template("disaggregated-consumer.json.jinja2")
-        consumer_path = consumer_dir / f"{pattern_id}-consumer.json"
+        consumer_path = consumer_dir / f"{pattern_id}.json"
         content = consumer_template.render(**template_vars)
         with open(consumer_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -270,8 +285,9 @@ def _generate_low_level_task(
     }
 
     # Ensure bytes_per_token is available for KVBench
+    # Default: 262144 bytes/token for Qwen2.5-32B (2 * 64 layers * 8 kv_heads * 128 head_dim * 2 bytes)
     if "bytes_per_token" not in template_vars:
-        template_vars["bytes_per_token"] = kv_cache_ref.get("bytes_per_token", 57344)
+        template_vars["bytes_per_token"] = kv_cache_ref.get("bytes_per_token", 262144)
 
     if tool in DUAL_NODE_TOOLS:
         # Generate server + client pair for dual-node execution
@@ -309,6 +325,45 @@ def _generate_low_level_task(
 
         print(f"  [OK] {output_path.name} ({tool})")
         return 1
+
+
+def _generate_analysis_task(
+    pattern: dict,
+    layer: dict,
+    plan: dict,
+    env: Environment,
+    output_dir: Path,
+) -> int:
+    """Generate JSON task definition for an analysis pattern.
+
+    Analysis patterns (type: "analysis" or "measurement") run data analysis
+    scripts without starting vLLM servers. They process results from previous
+    measurement layers (L1-Unified, L2-EFA, L3-TCP) and generate reports.
+
+    Returns number of files generated (always 1).
+    """
+    pattern_id = pattern["id"]
+    description = pattern.get("description", "")
+    infrastructure = plan["infrastructure"]
+
+    template_vars = {
+        "pattern_id": pattern_id,
+        "phase": plan.get("phase", "1"),
+        "infrastructure": infrastructure,
+        "description": description,
+        "layer_name": layer.get("name", ""),
+        "layer_priority": layer.get("priority", "P0"),
+    }
+
+    template = env.get_template("analysis.json.jinja2")
+    output_path = output_dir / f"{pattern_id}.json"
+    content = template.render(**template_vars)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"  [OK] {output_path.name} (analysis)")
+    return 1
 
 
 def main():
@@ -364,6 +419,7 @@ def main():
 
     # Output directories
     output_dir = SCRIPT_DIR / "task-definitions" / phase_name
+    producer_dir = output_dir / "producer"
     consumer_dir = output_dir / "consumer"
 
     low_level_dir = output_dir / "low-level"
@@ -371,10 +427,12 @@ def main():
     if args.dry_run:
         print("[DRY-RUN] Would create directories:")
         print(f"  {output_dir}")
+        print(f"  {producer_dir}")
         print(f"  {consumer_dir}")
         print(f"  {low_level_dir}")
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
+        producer_dir.mkdir(parents=True, exist_ok=True)
         consumer_dir.mkdir(parents=True, exist_ok=True)
 
     # Set up Jinja2
@@ -394,6 +452,9 @@ def main():
 
         if args.dry_run:
             for pattern in layer["patterns"]:
+                # Skip comment-only entries (no "id" field)
+                if "id" not in pattern:
+                    continue
                 tool = pattern.get("tool")
                 if tool and tool in LOW_LEVEL_TEMPLATE_MAP:
                     files = 2 if tool in DUAL_NODE_TOOLS else 1
@@ -407,8 +468,11 @@ def main():
                 total_patterns += 1
         else:
             for pattern in layer["patterns"]:
+                # Skip comment-only entries (no "id" field)
+                if "id" not in pattern:
+                    continue
                 files = generate_task_json(
-                    pattern, layer, plan, env, output_dir, consumer_dir
+                    pattern, layer, plan, env, output_dir, producer_dir, consumer_dir
                 )
                 total_files += files
                 total_patterns += 1
@@ -417,6 +481,7 @@ def main():
     print(f"[{'DRY-RUN ' if args.dry_run else ''}SUCCESS] Generated {total_files} JSON files from {total_patterns} patterns")
     if not args.dry_run:
         print(f"[INFO] Output: {output_dir}")
+        print(f"[INFO] Producer: {producer_dir}")
         print(f"[INFO] Consumer: {consumer_dir}")
         if low_level_dir.exists():
             print(f"[INFO] Low-level: {low_level_dir}")
