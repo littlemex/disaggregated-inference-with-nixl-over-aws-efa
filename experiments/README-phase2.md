@@ -786,16 +786,31 @@ export MLFLOW_EXPERIMENT_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 ./run_experiment.sh phase2 run all
 ```
 
-**測定開始時刻**: 2026-03-01 21:01:47
-**推定完了時刻**: 2026-03-02 07:31:47（約 10.5 時間後）
+**測定開始時刻**: 2026-03-01 21:10:43（tmux セッションで実行中）
+**推定完了時刻**: 2026-03-02 07:40:43（約 10.5 時間後）
 **MLFLOW_EXPERIMENT_TIMESTAMP**: 20260301-210020
 
-**測定進行状況**:
-- [完了] S3 デプロイ: スクリプトとタスクファイルをアップロード
-- [実行中] L0-Baseline: Pattern 1/8 完了（p2-baseline-fi-info）
-- [待機中] L1-Unified, L2-EFA, L3-TCP, L4-Analysis
+**tmux セッション情報**:
+```bash
+# セッションに接続
+tmux attach -t phase2-measurement
 
-**ログファイル**: `/tmp/phase2-measurement-final.log`
+# セッションから切断（測定は継続）
+Ctrl+B → D
+
+# ログをリアルタイム監視
+tail -f /tmp/phase2-measurement-tmux.log
+```
+
+**測定進行状況**:
+- [完了] クリーンアップ: 前回の測定プロセス停止
+- [完了] S3 デプロイ: スクリプトとタスクファイルをアップロード
+- [実行中] L0-Baseline: Pattern 1/8 実行中（p2-baseline-fi-info）
+- [待機中] L1-Unified（12 パターン）, L2-EFA（14 パターン、crosslayers 含む）, L3-TCP（14 パターン）, L4-Analysis（3 パターン）
+
+**ログファイル**: `/tmp/phase2-measurement-tmux.log`
+
+**重要**: tmux セッション内で実行中のため、ローカル接続が切れても測定は継続します。
 
 ### 追加実験: Cross-Layers KV-Cache Layout
 
