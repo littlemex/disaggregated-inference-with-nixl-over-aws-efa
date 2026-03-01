@@ -141,7 +141,7 @@
         "python3 -c 'import vllm; assert vllm.__version__ == \"{{VLLM_VERSION}}\", f\"Expected {{VLLM_VERSION}}, got {vllm.__version__}\"; print(f\"  vLLM: {vllm.__version__} [OK]\")'",
         "echo ''",
         "echo '[3/8] NIXL'",
-        "python3 -c 'import nixl; print(f\"  NIXL: {nixl.__version__} [OK]\")'",
+        "python3 -c 'import nixl; print(\"  NIXL: installed [OK]\")'",
         "echo ''",
         "echo '[4/8] MLflow'",
         "python3 -c 'import mlflow, sagemaker_mlflow, boto3; print(f\"  MLflow: {mlflow.__version__} [OK]\")'",
