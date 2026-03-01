@@ -1,0 +1,59 @@
+{# baseline-nccl-test.json.jinja2 - NCCL 帯域幅測定テンプレート #}
+{# 変数: PHASE, PATTERN_ID, OUTPUT_DIR, TIMESTAMP #}
+{# コマンド: all_reduce_perf -b 1M -e 1G -f 2 -g 4 #}
+{
+  "name": "L0-Baseline: nccl-tests - NCCL Bandwidth",
+  "description": "NCCL all_reduce_perf による帯域幅測定",
+  "variables": {
+    "PHASE": "{{ phase }}",
+    "PATTERN_ID": "{{ pattern_id }}",
+    "OUTPUT_DIR": "{{ output_dir | default('/tmp/results') }}",
+    "OUTPUT_FILE": "{{ output_dir | default('/tmp/results') }}/{{ pattern_id }}.json",
+    "TIMESTAMP": "{{ timestamp }}",
+    "NCCL_MIN_SIZE": "{{ nccl_min_size | default('1M') }}",
+    "NCCL_MAX_SIZE": "{{ nccl_max_size | default('1G') }}",
+    "NCCL_FACTOR": "{{ nccl_factor | default('2') }}",
+    "NCCL_NGPUS": "{{ nccl_ngpus | default('4') }}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-tools",
+      "name": "Verify NCCL test tools availability",
+      "commands": [
+        "echo '[INFO] Checking for NCCL test tools...'",
+        "mkdir -p {{"{{"}}OUTPUT_DIR{{"}}"}}",
+        "NCCL_BIN=$(which all_reduce_perf 2>/dev/null || find /usr/local -name all_reduce_perf 2>/dev/null | head -1 || echo '')",
+        "if [ -z \"$NCCL_BIN\" ]; then echo '[WARNING] all_reduce_perf not found in PATH or /usr/local'; else echo \"[OK] Found all_reduce_perf at: $NCCL_BIN\"; fi",
+        "echo '[OK] Tool verification complete'"
+      ]
+    },
+    {
+      "id": "02-check-gpus",
+      "name": "Verify GPU availability for NCCL test",
+      "commands": [
+        "echo '[INFO] Checking GPU availability...'",
+        "if command -v nvidia-smi >/dev/null 2>&1; then GPU_COUNT=$(nvidia-smi -L 2>/dev/null | wc -l); echo \"[INFO] GPU count: $GPU_COUNT\"; if [ \"$GPU_COUNT\" -lt \"{{"{{"}}NCCL_NGPUS{{"}}"}}\" ]; then echo \"[WARNING] Requested {{"{{"}}NCCL_NGPUS{{"}}"}} GPUs but only $GPU_COUNT available\"; fi; else echo '[WARNING] nvidia-smi not found, cannot verify GPU count'; fi",
+        "echo '[OK] GPU check complete'"
+      ]
+    },
+    {
+      "id": "03-run-nccl-allreduce",
+      "name": "Run all_reduce_perf (-b {{"{{"}}NCCL_MIN_SIZE{{"}}"}} -e {{"{{"}}NCCL_MAX_SIZE{{"}}"}} -f {{"{{"}}NCCL_FACTOR{{"}}"}} -g {{"{{"}}NCCL_NGPUS{{"}}"}})",
+      "commands": [
+        "echo '[INFO] Running NCCL all_reduce_perf...'",
+        "NCCL_BIN=$(which all_reduce_perf 2>/dev/null || find /usr/local -name all_reduce_perf 2>/dev/null | head -1 || echo '')",
+        "if [ -n \"$NCCL_BIN\" ]; then $NCCL_BIN -b {{"{{"}}NCCL_MIN_SIZE{{"}}"}} -e {{"{{"}}NCCL_MAX_SIZE{{"}}"}} -f {{"{{"}}NCCL_FACTOR{{"}}"}} -g {{"{{"}}NCCL_NGPUS{{"}}"}} 2>&1 | tee /tmp/nccl_allreduce_raw.txt || echo '[WARNING] all_reduce_perf exited with error'; else echo '[SKIP] all_reduce_perf not available' > /tmp/nccl_allreduce_raw.txt; fi",
+        "echo '[OK] NCCL all_reduce_perf completed'"
+      ]
+    },
+    {
+      "id": "04-collect-results",
+      "name": "Collect NCCL results into JSON",
+      "commands": [
+        "echo '[INFO] Collecting results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
+        "python3 /tmp/scripts/collect_nccl_test.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --min-size {{"{{"}}NCCL_MIN_SIZE{{"}}"}} --max-size {{"{{"}}NCCL_MAX_SIZE{{"}}"}} --factor {{"{{"}}NCCL_FACTOR{{"}}"}} --ngpus {{"{{"}}NCCL_NGPUS{{"}}"}}",
+        "echo '[OK] NCCL baseline measurement complete'"
+      ]
+    }
+  ]
+}

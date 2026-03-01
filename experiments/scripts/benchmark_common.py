@@ -620,7 +620,15 @@ def log_to_mlflow(
 
     try:
         mlflow.set_tracking_uri(args.mlflow_tracking_uri)
-        mlflow.set_experiment(args.mlflow_experiment_name)
+
+        # Add timestamp suffix to experiment name if MLFLOW_EXPERIMENT_TIMESTAMP is set
+        experiment_name = args.mlflow_experiment_name
+        experiment_timestamp = os.environ.get("MLFLOW_EXPERIMENT_TIMESTAMP")
+        if experiment_timestamp:
+            experiment_name = f"{experiment_name}-{experiment_timestamp}"
+            print(f"[INFO] Using timestamped experiment name: {experiment_name}")
+
+        mlflow.set_experiment(experiment_name)
 
         run_name = getattr(args, "mlflow_run_name", None)
         if not run_name:

@@ -144,6 +144,25 @@ LOW_LEVEL_CLIENT_TEMPLATE_MAP = {
     "ucx_perftest": "low-level-ucx-perftest-client.json.jinja2",
 }
 
+# Baseline tool to template mapping (single-node tools)
+BASELINE_TEMPLATE_MAP = {
+    "fi_info": "baseline-fi-info.json.jinja2",
+    "nccl-tests": "baseline-nccl-test.json.jinja2",
+    "nvidia-smi": "baseline-nvidia-smi.json.jinja2",
+    "nvidia-smi dmon": "baseline-nvidia-smi.json.jinja2",
+    "nvidia-smi topo -m": "baseline-nvidia-smi.json.jinja2",
+}
+
+# Baseline tools that require dual-node execution (server + client)
+BASELINE_DUAL_NODE_TOOLS = {"fi_rdm_bw", "fi_rdm_pingpong", "iperf3"}
+
+# Baseline dual-node tool template (same template, rendered with different node_role)
+BASELINE_DUAL_NODE_TEMPLATE_MAP = {
+    "fi_rdm_bw": "baseline-fi-rdm-bw.json.jinja2",
+    "fi_rdm_pingpong": "baseline-fi-rdm-pingpong.json.jinja2",
+    "iperf3": "baseline-iperf3.json.jinja2",
+}
+
 
 def generate_task_json(
     pattern: dict,
@@ -174,8 +193,18 @@ def generate_task_json(
             pattern, layer, plan, env, output_dir
         )
 
-    # Check if this is a low-level tool pattern
+    # Check if this is a baseline tool pattern (L0-Baseline layer only)
     tool = pattern.get("tool")
+    layer_id = layer.get("id", "")
+    is_baseline_layer = layer_id.startswith("L0-Baseline")
+    if is_baseline_layer and tool and (tool in BASELINE_TEMPLATE_MAP or tool in BASELINE_DUAL_NODE_TOOLS):
+        baseline_dir = output_dir / "baseline"
+        baseline_dir.mkdir(parents=True, exist_ok=True)
+        return _generate_baseline_task(
+            pattern, layer, plan, env, baseline_dir
+        )
+
+    # Check if this is a low-level tool pattern
     if tool and tool in LOW_LEVEL_TEMPLATE_MAP:
         low_level_dir = output_dir / "low-level"
         low_level_dir.mkdir(parents=True, exist_ok=True)
@@ -233,6 +262,118 @@ def generate_task_json(
 
         print(f"  [OK] {producer_path.name} + {consumer_path.name}")
         return 2
+
+
+def _generate_baseline_task(
+    pattern: dict,
+    layer: dict,
+    plan: dict,
+    env: Environment,
+    output_dir: Path,
+) -> int:
+    """Generate JSON task definition for a baseline measurement pattern.
+
+    Baseline tools (fi_info, fi_rdm_bw, fi_rdm_pingpong, iperf3, nccl-tests,
+    nvidia-smi) use dedicated templates from baseline-*.json.jinja2.
+
+    Dual-node tools (fi_rdm_bw, fi_rdm_pingpong, iperf3) generate server +
+    client JSON pairs. Single-node tools (fi_info, nccl-tests, nvidia-smi)
+    generate a single JSON file.
+
+    When pattern has "node": "both" and the tool is dual-node, two files are
+    generated: one with node_role=server and one with node_role=client.
+
+    Returns number of files generated.
+    """
+    tool = pattern["tool"]
+    pattern_id = pattern["id"]
+    phase = plan["phase"]
+    infrastructure = plan["infrastructure"]
+
+    # Timestamp for output file naming
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Base template variables shared across all baseline tools
+    base_vars = {
+        "pattern_id": pattern_id,
+        "phase": phase,
+        "infrastructure": infrastructure,
+        "output_dir": "/tmp/results",
+        "timestamp": timestamp,
+        "layer_name": layer.get("name", ""),
+        "layer_priority": layer.get("priority", "P0"),
+    }
+
+    # Add NCCL-specific parameters
+    if tool == "nccl-tests":
+        base_vars["nccl_min_size"] = pattern.get("nccl_min_size", "1M")
+        base_vars["nccl_max_size"] = pattern.get("nccl_max_size", "1G")
+        base_vars["nccl_factor"] = pattern.get("nccl_factor", "2")
+        base_vars["nccl_ngpus"] = str(infrastructure.get("gpu_count_per_node", 4))
+
+    if tool in BASELINE_DUAL_NODE_TOOLS:
+        # Dual-node: generate server + client pair
+        template_name = BASELINE_DUAL_NODE_TEMPLATE_MAP[tool]
+        template = env.get_template(template_name)
+
+        # Server JSON
+        server_vars = {**base_vars, "node_role": "server", "peer_ip": ""}
+        server_vars["pattern_id"] = f"{pattern_id}-server"
+        server_vars["output_dir"] = "/tmp/results"
+        server_path = output_dir / f"{pattern_id}-server.json"
+        server_content = template.render(**server_vars)
+
+        # Validate JSON
+        try:
+            json.loads(server_content)
+        except json.JSONDecodeError as e:
+            print(f"  [ERROR] Invalid JSON for {pattern_id}-server: {e}")
+            return 0
+
+        with open(server_path, "w", encoding="utf-8") as f:
+            f.write(server_content)
+
+        # Client JSON
+        client_vars = {**base_vars, "node_role": "client", "peer_ip": ""}
+        client_vars["pattern_id"] = f"{pattern_id}-client"
+        client_vars["output_dir"] = "/tmp/results"
+        client_path = output_dir / f"{pattern_id}-client.json"
+        client_content = template.render(**client_vars)
+
+        try:
+            json.loads(client_content)
+        except json.JSONDecodeError as e:
+            print(f"  [ERROR] Invalid JSON for {pattern_id}-client: {e}")
+            return 0
+
+        with open(client_path, "w", encoding="utf-8") as f:
+            f.write(client_content)
+
+        print(f"  [OK] {server_path.name} + {client_path.name} (baseline: {tool})")
+        return 2
+    else:
+        # Single-node tool (fi_info, nccl-tests, nvidia-smi variants)
+        template_name = BASELINE_TEMPLATE_MAP.get(tool)
+        if template_name is None:
+            print(f"  [ERROR] No baseline template found for tool: {tool}")
+            return 0
+
+        template = env.get_template(template_name)
+        output_path = output_dir / f"{pattern_id}.json"
+        content = template.render(**base_vars)
+
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            print(f"  [ERROR] Invalid JSON for {pattern_id}: {e}")
+            return 0
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        print(f"  [OK] {output_path.name} (baseline: {tool})")
+        return 1
 
 
 def _generate_low_level_task(
@@ -423,6 +564,7 @@ def main():
     consumer_dir = output_dir / "consumer"
 
     low_level_dir = output_dir / "low-level"
+    baseline_dir = output_dir / "baseline"
 
     if args.dry_run:
         print("[DRY-RUN] Would create directories:")
@@ -430,6 +572,7 @@ def main():
         print(f"  {producer_dir}")
         print(f"  {consumer_dir}")
         print(f"  {low_level_dir}")
+        print(f"  {baseline_dir}")
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
         producer_dir.mkdir(parents=True, exist_ok=True)
@@ -456,7 +599,12 @@ def main():
                 if "id" not in pattern:
                     continue
                 tool = pattern.get("tool")
-                if tool and tool in LOW_LEVEL_TEMPLATE_MAP:
+                is_baseline = layer_id.startswith("L0-Baseline")
+                if is_baseline and tool and (tool in BASELINE_TEMPLATE_MAP or tool in BASELINE_DUAL_NODE_TOOLS):
+                    files = 2 if tool in BASELINE_DUAL_NODE_TOOLS else 1
+                    mode = "server+client" if tool in BASELINE_DUAL_NODE_TOOLS else "single"
+                    print(f"  [DRY-RUN] {pattern['id']}: {files} file(s) (baseline: {tool}, {mode})")
+                elif tool and tool in LOW_LEVEL_TEMPLATE_MAP:
                     files = 2 if tool in DUAL_NODE_TOOLS else 1
                     mode = "server+client" if tool in DUAL_NODE_TOOLS else "single"
                     print(f"  [DRY-RUN] {pattern['id']}: {files} file(s) ({tool}, {mode})")
@@ -483,6 +631,8 @@ def main():
         print(f"[INFO] Output: {output_dir}")
         print(f"[INFO] Producer: {producer_dir}")
         print(f"[INFO] Consumer: {consumer_dir}")
+        if baseline_dir.exists():
+            print(f"[INFO] Baseline: {baseline_dir}")
         if low_level_dir.exists():
             print(f"[INFO] Low-level: {low_level_dir}")
     print()

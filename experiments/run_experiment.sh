@@ -108,6 +108,55 @@ usage() {
     exit 1
 }
 
+# ---- Phase State Management ----
+
+get_phase_state_dir() {
+    local phase="$1"
+    echo "$SCRIPT_DIR/.phase-state/$phase"
+}
+
+get_experiment_timestamp() {
+    local phase="$1"
+    local state_dir
+    state_dir=$(get_phase_state_dir "$phase")
+    local timestamp_file="$state_dir/experiment_timestamp"
+
+    # Read phase plan to check if timestamp_suffix is enabled
+    local plan_file="$SCRIPT_DIR/experiment-plans/$phase.json"
+    if [ ! -f "$plan_file" ]; then
+        echo ""
+        return
+    fi
+
+    local timestamp_enabled
+    timestamp_enabled=$(python3 -c "import json; plan = json.load(open('$plan_file')); print(plan.get('mlflow_config', {}).get('timestamp_suffix', False))" 2>/dev/null || echo "False")
+
+    if [ "$timestamp_enabled" != "True" ]; then
+        echo ""
+        return
+    fi
+
+    # If timestamp file exists, read it
+    if [ -f "$timestamp_file" ]; then
+        cat "$timestamp_file"
+    else
+        # Generate new timestamp
+        mkdir -p "$state_dir"
+        local new_timestamp
+        new_timestamp=$(date -u '+%Y%m%d-%H%M%S')
+        echo "$new_timestamp" > "$timestamp_file"
+        echo "$new_timestamp"
+    fi
+}
+
+reset_experiment_timestamp() {
+    local phase="$1"
+    local state_dir
+    state_dir=$(get_phase_state_dir "$phase")
+    rm -f "$state_dir/experiment_timestamp"
+    info "Experiment timestamp reset for $phase"
+}
+
 # ---- Deploy ----
 
 do_deploy() {
@@ -146,6 +195,8 @@ do_deploy() {
 run_task_on_node() {
     local json_path="$1"
     local instance_id="$2"
+    local phase="$3"
+    local extra_env="$4"  # Optional: additional environment variables
     local json_name
     json_name=$(basename "$json_path")
 
@@ -155,42 +206,105 @@ run_task_on_node() {
     local relative_path="${json_path#*task-definitions/}"
     local s3_task_key="tasks/$relative_path"
 
+    # Get experiment timestamp for this phase
+    local exp_timestamp
+    exp_timestamp=$(get_experiment_timestamp "$phase")
+
     log "Running $json_name on instance: $instance_id"
 
-    ssm_run_command "$instance_id" \
-        "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/task_runner.sh /tmp/" \
-        "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/benchmark_common.py /tmp/" \
-        "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/disagg_proxy_server.py /tmp/ 2>/dev/null || true" \
-        "aws s3 cp s3://$SCRIPTS_BUCKET/$s3_task_key /tmp/$json_name" \
-        "chmod +x /tmp/task_runner.sh" \
-        "export NODE1_PRIVATE=$NODE1_PRIVATE NODE2_PRIVATE=$NODE2_PRIVATE && bash /tmp/task_runner.sh /tmp/$json_name --reset"
+    # Build environment variable exports
+    local env_exports="export NODE1_PRIVATE='$NODE1_PRIVATE' NODE2_PRIVATE='$NODE2_PRIVATE'"
+    if [ -n "$exp_timestamp" ]; then
+        env_exports="$env_exports MLFLOW_EXPERIMENT_TIMESTAMP='$exp_timestamp'"
+        info "Using experiment timestamp: $exp_timestamp"
+    fi
 
-    success "$json_name completed on $instance_id"
+    # Extract PEER_IP from extra_env if present (format: "PEER_IP='172.31.47.40'")
+    local peer_ip=""
+    if [ -n "$extra_env" ]; then
+        env_exports="$env_exports $extra_env"
+        peer_ip=$(echo "$extra_env" | sed -n "s/.*PEER_IP='\([^']*\)'.*/\1/p")
+    fi
+
+    # Prepare commands array
+    local commands=(
+        "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/task_runner.sh /tmp/"
+        "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/benchmark_common.py /tmp/"
+        "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/disagg_proxy_server.py /tmp/ 2>/dev/null || true"
+        "mkdir -p /tmp/scripts"
+        "aws s3 sync s3://$SCRIPTS_BUCKET/scripts/ /tmp/scripts/ --exclude 'task_runner.sh' --exclude 'benchmark_common.py' --exclude 'disagg_proxy_server.py'"
+        "aws s3 cp s3://$SCRIPTS_BUCKET/$s3_task_key /tmp/$json_name"
+    )
+
+    # Add PEER_IP override if needed
+    if [ -n "$peer_ip" ]; then
+        commands+=("jq '.variables.PEER_IP = \"$peer_ip\"' /tmp/$json_name > /tmp/${json_name}.tmp && mv /tmp/${json_name}.tmp /tmp/$json_name")
+    fi
+
+    commands+=(
+        "chmod +x /tmp/task_runner.sh"
+        "runuser ubuntu -c \"$env_exports && bash /tmp/task_runner.sh /tmp/$json_name --reset\""
+    )
+
+    if ssm_run_command "$instance_id" "${commands[@]}"; then
+        success "$json_name completed on $instance_id"
+        return 0
+    else
+        echo -e "${RED}[ERROR]${NC} $json_name failed on $instance_id"
+        return 1
+    fi
 }
 
 run_single_pattern() {
     local phase="$1"
     local pattern_id="$2"
     local task_dir="$SCRIPT_DIR/task-definitions/$phase"
+    local producer_dir="$task_dir/producer"
     local consumer_dir="$task_dir/consumer"
     local client_dir="$task_dir/client"
+    local baseline_dir="$task_dir/baseline"
 
-    # Determine if this is a unified, disaggregated, or low-level dual-node pattern
-    local producer_json="$task_dir/$pattern_id.json"
-    local consumer_json="$consumer_dir/$pattern_id-consumer.json"
-    local client_json="$client_dir/$pattern_id-client.json"
+    # Determine if this is a baseline pattern
+    local producer_json
+    if [[ "$pattern_id" == p*-baseline-* ]]; then
+        # Baseline pattern: check baseline/ subdirectory
+        if [ -f "$baseline_dir/$pattern_id.json" ]; then
+            producer_json="$baseline_dir/$pattern_id.json"
+        elif [ -f "$baseline_dir/$pattern_id-server.json" ]; then
+            # Baseline dual-node (server)
+            producer_json="$baseline_dir/$pattern_id-server.json"
+            client_json="$baseline_dir/$pattern_id-client.json"
+        else
+            error "Baseline task definition not found: $baseline_dir/$pattern_id.json or $baseline_dir/$pattern_id-server.json"
+        fi
+    else
+        # Regular pattern: check producer/ subdirectory first, then fallback to root
+        if [ -f "$producer_dir/$pattern_id.json" ]; then
+            producer_json="$producer_dir/$pattern_id.json"
+        elif [ -f "$task_dir/$pattern_id.json" ]; then
+            producer_json="$task_dir/$pattern_id.json"
+        else
+            error "Producer task definition not found: $producer_dir/$pattern_id.json or $task_dir/$pattern_id.json"
+        fi
+        consumer_json="$consumer_dir/$pattern_id-consumer.json"
+        client_json="$client_dir/$pattern_id-client.json"
+    fi
 
     if [ ! -f "$producer_json" ]; then
         error "Task definition not found: $producer_json"
     fi
 
     if [ -f "$client_json" ]; then
-        # Low-level dual-node: Run Server on Node1, Client on Node2
-        info "Low-level dual-node pattern detected. Running Server on Node1, Client on Node2."
+        # Dual-node (baseline or low-level): Run Server on Node1, Client on Node2
+        if [[ "$pattern_id" == p*-baseline-* ]]; then
+            info "Baseline dual-node pattern detected. Running Server on Node1, Client on Node2."
+        else
+            info "Low-level dual-node pattern detected. Running Server on Node1, Client on Node2."
+        fi
         echo ""
 
         log "Starting Server on Node1 ($NODE1_ID)..."
-        run_task_on_node "$producer_json" "$NODE1_ID" &
+        run_task_on_node "$producer_json" "$NODE1_ID" "$phase" "PEER_IP='$NODE2_PRIVATE'" &
         local server_pid=$!
 
         # Wait for server to start before launching client
@@ -198,18 +312,21 @@ run_single_pattern() {
         sleep 10
 
         log "Starting Client on Node2 ($NODE2_ID)..."
-        run_task_on_node "$client_json" "$NODE2_ID"
-
-        # Wait for Server to complete
-        wait $server_pid 2>/dev/null || true
-        success "Pattern $pattern_id completed (dual-node)"
+        if run_task_on_node "$client_json" "$NODE2_ID" "$phase" "PEER_IP='$NODE1_PRIVATE'"; then
+            # Wait for Server to complete
+            wait $server_pid 2>/dev/null || true
+            success "Pattern $pattern_id completed (dual-node)"
+        else
+            echo -e "${RED}[ERROR]${NC} Pattern $pattern_id failed, but continuing..."
+            return 1
+        fi
     elif [ -f "$consumer_json" ]; then
         # Disaggregated: Run Consumer first, then Producer
         info "Disaggregated pattern detected. Running Consumer first, then Producer."
         echo ""
 
         log "Starting Consumer on Node2 ($NODE2_ID)..."
-        run_task_on_node "$consumer_json" "$NODE2_ID" &
+        run_task_on_node "$consumer_json" "$NODE2_ID" "$phase" &
         local consumer_pid=$!
 
         # Wait for Consumer to initialize before starting Producer
@@ -217,16 +334,23 @@ run_single_pattern() {
         sleep 30
 
         log "Starting Producer on Node1 ($NODE1_ID)..."
-        run_task_on_node "$producer_json" "$NODE1_ID"
-
-        # Wait for Consumer to complete
-        wait $consumer_pid 2>/dev/null || true
-        success "Pattern $pattern_id completed"
+        if run_task_on_node "$producer_json" "$NODE1_ID" "$phase"; then
+            # Wait for Consumer to complete
+            wait $consumer_pid 2>/dev/null || true
+            success "Pattern $pattern_id completed"
+        else
+            echo -e "${RED}[ERROR]${NC} Pattern $pattern_id failed, but continuing..."
+            return 1
+        fi
     else
         # Unified: Run on Node1
         info "Unified pattern detected. Running on Node1 ($NODE1_ID)."
-        run_task_on_node "$producer_json" "$NODE1_ID"
-        success "Pattern $pattern_id completed"
+        if run_task_on_node "$producer_json" "$NODE1_ID" "$phase"; then
+            success "Pattern $pattern_id completed"
+        else
+            echo -e "${RED}[ERROR]${NC} Pattern $pattern_id failed, but continuing..."
+            return 1
+        fi
     fi
 }
 
@@ -274,15 +398,25 @@ PYEOF
     echo ""
 
     local idx=0
+    local failed_count=0
     while IFS= read -r pattern_id; do
         idx=$((idx + 1))
         echo ""
         log "=== Pattern $idx/$pattern_count: $pattern_id ==="
-        run_single_pattern "$phase" "$pattern_id"
+        if run_single_pattern "$phase" "$pattern_id"; then
+            echo "" # Success logged by run_single_pattern
+        else
+            failed_count=$((failed_count + 1))
+            echo -e "${YELLOW}[WARNING]${NC} Pattern $pattern_id failed, continuing with next pattern..."
+        fi
     done <<< "$patterns"
 
     echo ""
-    success "Layer $layer_id completed ($pattern_count patterns)"
+    if [ $failed_count -eq 0 ]; then
+        success "Layer $layer_id completed ($pattern_count patterns, all succeeded)"
+    else
+        echo -e "${YELLOW}[WARNING]${NC} Layer $layer_id completed with $failed_count failures ($((pattern_count - failed_count))/$pattern_count succeeded)"
+    fi
 }
 
 run_all_layers() {

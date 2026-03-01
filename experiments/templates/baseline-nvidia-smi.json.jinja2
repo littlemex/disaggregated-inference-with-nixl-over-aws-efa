@@ -1,0 +1,71 @@
+{# baseline-nvidia-smi.json.jinja2 - GPU 情報収集テンプレート #}
+{# 変数: PHASE, PATTERN_ID, OUTPUT_DIR, TIMESTAMP #}
+{# コマンド: nvidia-smi -q, nvidia-smi dmon, nvidia-smi topo -m #}
+{
+  "name": "L0-Baseline: nvidia-smi - GPU Information",
+  "description": "GPU デバイス情報、トポロジ、モニタリングデータの収集",
+  "variables": {
+    "PHASE": "{{ phase }}",
+    "PATTERN_ID": "{{ pattern_id }}",
+    "OUTPUT_DIR": "{{ output_dir | default('/tmp/results') }}",
+    "OUTPUT_FILE": "{{ output_dir | default('/tmp/results') }}/{{ pattern_id }}.json",
+    "TIMESTAMP": "{{ timestamp }}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-tools",
+      "name": "Verify nvidia-smi availability",
+      "commands": [
+        "echo '[INFO] Checking for nvidia-smi...'",
+        "mkdir -p {{"{{"}}OUTPUT_DIR{{"}}"}}",
+        "if ! command -v nvidia-smi >/dev/null 2>&1; then echo '[WARNING] nvidia-smi not found'; fi",
+        "echo '[OK] Tool verification complete'"
+      ]
+    },
+    {
+      "id": "02-run-nvidia-smi-query",
+      "name": "Run nvidia-smi -q (detailed GPU info)",
+      "commands": [
+        "echo '[INFO] Running nvidia-smi -q...'",
+        "if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi -q > /tmp/nvidia_smi_q_raw.txt 2>&1 || echo '[WARNING] nvidia-smi -q returned error'; else echo '[SKIP] nvidia-smi not available' > /tmp/nvidia_smi_q_raw.txt; fi",
+        "echo '[OK] nvidia-smi -q output captured'"
+      ]
+    },
+    {
+      "id": "03-run-nvidia-smi-query-xml",
+      "name": "Run nvidia-smi -q -x (XML format for parsing)",
+      "commands": [
+        "echo '[INFO] Running nvidia-smi -q -x...'",
+        "if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi -q -x > /tmp/nvidia_smi_q_xml.txt 2>&1 || echo '[WARNING] nvidia-smi -q -x returned error'; else echo '[SKIP]' > /tmp/nvidia_smi_q_xml.txt; fi",
+        "echo '[OK] nvidia-smi XML output captured'"
+      ]
+    },
+    {
+      "id": "04-run-nvidia-smi-topo",
+      "name": "Run nvidia-smi topo -m (GPU topology)",
+      "commands": [
+        "echo '[INFO] Running nvidia-smi topo -m...'",
+        "if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi topo -m > /tmp/nvidia_smi_topo_raw.txt 2>&1 || echo '[WARNING] nvidia-smi topo returned error'; else echo '[SKIP]' > /tmp/nvidia_smi_topo_raw.txt; fi",
+        "echo '[OK] nvidia-smi topo output captured'"
+      ]
+    },
+    {
+      "id": "05-run-nvidia-smi-dmon",
+      "name": "Run nvidia-smi dmon (5 second sample)",
+      "commands": [
+        "echo '[INFO] Running nvidia-smi dmon for 5 seconds...'",
+        "if command -v nvidia-smi >/dev/null 2>&1; then timeout 5 nvidia-smi dmon -s pucvmet -d 1 > /tmp/nvidia_smi_dmon_raw.txt 2>&1 || true; else echo '[SKIP]' > /tmp/nvidia_smi_dmon_raw.txt; fi",
+        "echo '[OK] nvidia-smi dmon output captured'"
+      ]
+    },
+    {
+      "id": "06-collect-results",
+      "name": "Collect GPU information into JSON",
+      "commands": [
+        "echo '[INFO] Collecting results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
+        "python3 /tmp/scripts/collect_nvidia_smi.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}}",
+        "echo '[OK] nvidia-smi baseline measurement complete'"
+      ]
+    }
+  ]
+}

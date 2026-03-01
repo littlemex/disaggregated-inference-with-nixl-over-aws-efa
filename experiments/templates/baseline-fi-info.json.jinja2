@@ -1,0 +1,53 @@
+{# baseline-fi-info.json.jinja2 - EFA デバイス検証テンプレート #}
+{# 変数: PHASE, PATTERN_ID, OUTPUT_DIR, TIMESTAMP #}
+{
+  "name": "L0-Baseline: fi_info - EFA Device Verification",
+  "description": "EFA デバイス情報の収集と検証",
+  "variables": {
+    "PHASE": "{{ phase }}",
+    "PATTERN_ID": "{{ pattern_id }}",
+    "OUTPUT_DIR": "{{ output_dir | default('/tmp/results') }}",
+    "OUTPUT_FILE": "{{ output_dir | default('/tmp/results') }}/{{ pattern_id }}.json",
+    "TIMESTAMP": "{{ timestamp }}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-tools",
+      "name": "Verify fi_info and ibv_devices availability",
+      "commands": [
+        "echo '[INFO] Checking for EFA diagnostic tools...'",
+        "mkdir -p {{"{{"}}OUTPUT_DIR{{"}}"}}",
+        "if ! command -v fi_info >/dev/null 2>&1; then echo '[WARNING] fi_info not found, will skip EFA checks'; fi",
+        "if ! command -v ibv_devices >/dev/null 2>&1; then echo '[WARNING] ibv_devices not found, will skip verbs checks'; fi",
+        "echo '[OK] Tool verification complete'"
+      ]
+    },
+    {
+      "id": "02-run-fi-info",
+      "name": "Run fi_info -p efa",
+      "commands": [
+        "echo '[INFO] Running fi_info -p efa...'",
+        "if command -v fi_info >/dev/null 2>&1; then fi_info -p efa > /tmp/fi_info_efa_raw.txt 2>&1 || echo '[WARNING] fi_info -p efa returned non-zero exit code'; else echo '[SKIP] fi_info not available' > /tmp/fi_info_efa_raw.txt; fi",
+        "echo '[OK] fi_info output captured'"
+      ]
+    },
+    {
+      "id": "03-run-ibv-devices",
+      "name": "Run ibv_devices",
+      "commands": [
+        "echo '[INFO] Running ibv_devices...'",
+        "if command -v ibv_devices >/dev/null 2>&1; then ibv_devices > /tmp/ibv_devices_raw.txt 2>&1 || echo '[WARNING] ibv_devices returned non-zero exit code'; else echo '[SKIP] ibv_devices not available' > /tmp/ibv_devices_raw.txt; fi",
+        "echo '[OK] ibv_devices output captured'"
+      ]
+    },
+    {
+      "id": "04-collect-results",
+      "name": "Collect results into JSON",
+      "commands": [
+        "echo '[INFO] Collecting results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
+        "python3 /tmp/scripts/collect_fi_info.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}}",
+        "echo '[OK] fi_info baseline measurement complete'"
+      ]
+    }
+  ]
+}

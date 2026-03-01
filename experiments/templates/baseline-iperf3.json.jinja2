@@ -1,0 +1,88 @@
+{# baseline-iperf3.json.jinja2 - TCP 帯域幅測定テンプレート #}
+{# 変数: PHASE, PATTERN_ID, OUTPUT_DIR, TIMESTAMP, NODE_ROLE, PEER_IP #}
+{# ノード: Server = Node2, Client = Node1 #}
+{# 並列ストリーム: 1, 4, 8 #}
+{
+  "name": "L0-Baseline: iperf3 - TCP Bandwidth ({{ node_role | default('client') }})",
+  "description": "TCP 帯域幅の測定 ({{ node_role | default('client') }} side, P=1,4,8)",
+  "variables": {
+    "PHASE": "{{ phase }}",
+    "PATTERN_ID": "{{ pattern_id }}",
+    "OUTPUT_DIR": "{{ output_dir | default('/tmp/results') }}",
+    "OUTPUT_FILE": "{{ output_dir | default('/tmp/results') }}/{{ pattern_id }}.json",
+    "TIMESTAMP": "{{ timestamp }}",
+    "NODE_ROLE": "{{ node_role | default('client') }}",
+    "PEER_IP": "{{ peer_ip | default('') }}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-tools",
+      "name": "Verify iperf3 availability",
+      "commands": [
+        "echo '[INFO] Checking for iperf3...'",
+        "mkdir -p {{"{{"}}OUTPUT_DIR{{"}}"}}",
+        "if ! command -v iperf3 >/dev/null 2>&1; then echo '[WARNING] iperf3 not found'; fi",
+        "echo '[OK] Tool verification complete'"
+      ]
+    },
+{% if node_role == 'server' %}
+    {
+      "id": "02-run-iperf3-server",
+      "name": "Run iperf3 server",
+      "commands": [
+        "echo '[INFO] Starting iperf3 server...'",
+        "echo '[INFO] Server will run for up to 300 seconds waiting for client connections'",
+        "if command -v iperf3 >/dev/null 2>&1; then pkill -f 'iperf3 -s' 2>/dev/null || true; sleep 1; timeout 300 iperf3 -s -J 2>&1 | tee /tmp/iperf3_server_raw.txt || echo '[INFO] iperf3 server session ended'; else echo '[SKIP] iperf3 not available' > /tmp/iperf3_server_raw.txt; fi",
+        "echo '[OK] iperf3 server completed'"
+      ]
+    },
+    {
+      "id": "03-collect-results",
+      "name": "Collect server-side results into JSON",
+      "commands": [
+        "echo '[INFO] Collecting server results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
+        "python3 /tmp/scripts/collect_iperf3.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --node-role server",
+        "echo '[OK] iperf3 server baseline complete'"
+      ]
+    }
+{% else %}
+    {
+      "id": "02-run-iperf3-p1",
+      "name": "Run iperf3 client (P=1, 30s)",
+      "commands": [
+        "echo '[INFO] Running iperf3 -c {{"{{"}}PEER_IP{{"}}"}} -P 1 -t 30 -J...'",
+        "sleep 5",
+        "if command -v iperf3 >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then iperf3 -c {{"{{"}}PEER_IP{{"}}"}} -P 1 -t 30 -J > /tmp/iperf3_p1_raw.json 2>&1 || echo '[WARNING] iperf3 P=1 exited with error'; else echo '{\"error\": \"iperf3 not available or PEER_IP not set\"}' > /tmp/iperf3_p1_raw.json; fi",
+        "echo '[OK] iperf3 P=1 completed'"
+      ]
+    },
+    {
+      "id": "03-run-iperf3-p4",
+      "name": "Run iperf3 client (P=4, 30s)",
+      "commands": [
+        "echo '[INFO] Running iperf3 -c {{"{{"}}PEER_IP{{"}}"}} -P 4 -t 30 -J...'",
+        "if command -v iperf3 >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then iperf3 -c {{"{{"}}PEER_IP{{"}}"}} -P 4 -t 30 -J > /tmp/iperf3_p4_raw.json 2>&1 || echo '[WARNING] iperf3 P=4 exited with error'; else echo '{\"error\": \"iperf3 not available or PEER_IP not set\"}' > /tmp/iperf3_p4_raw.json; fi",
+        "echo '[OK] iperf3 P=4 completed'"
+      ]
+    },
+    {
+      "id": "04-run-iperf3-p8",
+      "name": "Run iperf3 client (P=8, 30s)",
+      "commands": [
+        "echo '[INFO] Running iperf3 -c {{"{{"}}PEER_IP{{"}}"}} -P 8 -t 30 -J...'",
+        "if command -v iperf3 >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then iperf3 -c {{"{{"}}PEER_IP{{"}}"}} -P 8 -t 30 -J > /tmp/iperf3_p8_raw.json 2>&1 || echo '[WARNING] iperf3 P=8 exited with error'; else echo '{\"error\": \"iperf3 not available or PEER_IP not set\"}' > /tmp/iperf3_p8_raw.json; fi",
+        "echo '[OK] iperf3 P=8 completed'"
+      ]
+    },
+    {
+      "id": "05-collect-results",
+      "name": "Collect client-side bandwidth results into JSON",
+      "commands": [
+        "echo '[INFO] Collecting results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
+        "python3 /tmp/scripts/collect_iperf3.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --node-role client --peer-ip '{{"{{"}}PEER_IP{{"}}"}}'",
+        "echo '[OK] iperf3 baseline measurement complete'"
+      ]
+    }
+{% endif %}
+  ]
+}

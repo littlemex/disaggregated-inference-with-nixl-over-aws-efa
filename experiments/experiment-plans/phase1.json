@@ -3,6 +3,11 @@
   "name": "Complete Re-measurement: Unified + EFA + TCP (1K-128K)",
   "description": "Full re-measurement phase with all baseline, unified, EFA, TCP measurements. Replaces Phase 14-18. Includes TPOT separation analysis, bimodality detection, and Proxy overhead isolation.",
   "created": "2026-02-28",
+  "mlflow_config": {
+    "experiment_name": "nixl-efa-phase1",
+    "timestamp_suffix": true,
+    "_comment": "Set timestamp_suffix to false to disable timestamp in experiment name. When true, experiment name becomes: nixl-efa-phase1-YYYYMMDD-HHMMSS"
+  },
   "infrastructure": {
     "instance_type": "g6e.12xlarge",
     "node_count": 2,
@@ -530,7 +535,7 @@
       "id": "L2-EFA",
       "name": "EFA Disaggregated (1K-128K)",
       "priority": "P0",
-      "description": "EFA KV-Cache transfer measurements via Proxy (toy_proxy_server.py). NixlConnector with LIBFABRIC backend, kv_buffer_device=cuda.",
+      "description": "EFA KV-Cache transfer measurements via Proxy (disagg_proxy_server.py v3). NixlConnector with LIBFABRIC backend, kv_buffer_device=cuda (g6e.12xlarge does not support GPUDirect RDMA but cuda buffer is available).",
       "estimated_time_minutes": 420,
       "vllm_config": {
         "mode": "disaggregated",
@@ -873,7 +878,7 @@
       "id": "L3-TCP",
       "name": "TCP Disaggregated (1K-128K)",
       "priority": "P0",
-      "description": "TCP KV-Cache transfer measurements via Proxy (toy_proxy_server.py). NixlConnector with UCX backend (UCX_TLS=tcp,self,sm), kv_buffer_device=cpu.",
+      "description": "TCP KV-Cache transfer measurements via Proxy (disagg_proxy_server.py v3). NixlConnector with UCX backend (UCX_TLS=tcp,self,sm), kv_buffer_device=cpu (explicit cudaMemcpy D2H + H2D).",
       "estimated_time_minutes": 420,
       "vllm_config": {
         "mode": "disaggregated",
@@ -1243,7 +1248,7 @@
         {
           "id": "p1-analysis-proxy-overhead",
           "type": "measurement",
-          "description": "Proxy internal timestamps to measure request forwarding, response relay overhead. Uses modified toy_proxy_server.py.",
+          "description": "Proxy internal timestamps to measure request forwarding, response relay overhead. Uses disagg_proxy_server.py v3 with X-Proxy-* headers.",
           "inputs": [
             "L2-EFA measurement runs"
           ],

@@ -135,9 +135,9 @@ const availabilityZone = app.node.tryGetContext("availabilityZone");
 const useCapacityBlock = app.node.tryGetContext("useCapacityBlock") === "true";
 const capacityReservationId = app.node.tryGetContext("capacityReservationId");
 
-// Get MLflow ARN from MLflow stack output
-// Remove optional chaining to ensure mlflowArn is always defined
+// Get MLflow ARN and artifact bucket ARN from MLflow stack output
 const mlflowArn = mlflowStack.trackingServer.attrTrackingServerArn;
+const mlflowArtifactBucketArn = mlflowStack.artifactBucket.bucketArn;
 
 // Generate unique stack name for NIXL EFA
 const nixlEfaStackName = getStackName(app, "nixl-efa", "dev");
@@ -151,6 +151,7 @@ const nixlEfaStack = new NixlEfaStack(app, nixlEfaStackName, {
   availabilityZone,
   vpcId: vpcId || undefined,
   mlflowTrackingServerArn: mlflowArn,
+  mlflowArtifactBucketArn,
   useCapacityBlock,
   capacityReservationId: capacityReservationId || undefined,
   env: {

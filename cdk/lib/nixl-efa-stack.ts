@@ -99,6 +99,9 @@ export interface NixlEfaStackProps extends StackProps {
   /** MLflow Tracking Server ARN (optional). */
   mlflowTrackingServerArn?: string;
 
+  /** MLflow Artifact S3 Bucket ARN (optional). Required for logging artifacts to MLflow. */
+  mlflowArtifactBucketArn?: string;
+
   /** Use ML Capacity Block for purchasing capacity (optional). */
   useCapacityBlock?: boolean;
 
@@ -125,6 +128,7 @@ export class NixlEfaStack extends Stack {
       availabilityZone,
       vpcId,
       mlflowTrackingServerArn,
+      mlflowArtifactBucketArn,
       useCapacityBlock,
       capacityReservationId,
     } = props;
@@ -251,6 +255,35 @@ export class NixlEfaStack extends Stack {
       );
     }
 
+    // Allow access to MLflow artifact S3 bucket if provided
+    if (mlflowArtifactBucketArn) {
+      // S3 object-level operations (read/write artifacts)
+      ec2Role.addToPolicy(
+        new iam.PolicyStatement({
+          sid: "MLflowArtifactBucketObjects",
+          actions: [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:GetObjectVersion",
+          ],
+          resources: [`${mlflowArtifactBucketArn}/*`],
+        })
+      );
+
+      // S3 bucket-level operations (list artifacts)
+      ec2Role.addToPolicy(
+        new iam.PolicyStatement({
+          sid: "MLflowArtifactBucketList",
+          actions: [
+            "s3:ListBucket",
+            "s3:GetBucketLocation",
+          ],
+          resources: [mlflowArtifactBucketArn],
+        })
+      );
+    }
+
     const instanceProfile = new iam.CfnInstanceProfile(this, "NixlEfaInstanceProfile", {
       roles: [ec2Role.roleName],
     });
@@ -271,6 +304,9 @@ export class NixlEfaStack extends Stack {
         "# Install dependencies",
         "apt-get update -qq",
         "apt-get install -y -qq jq",
+        "# Install sagemaker-mlflow and boto3 for MLflow integration",
+        "# Install as ubuntu user to avoid permission issues with pip in DLAMI",
+        'runuser -l ubuntu -c "pip install sagemaker-mlflow boto3"',
       );
     } else {
       userData.addCommands(

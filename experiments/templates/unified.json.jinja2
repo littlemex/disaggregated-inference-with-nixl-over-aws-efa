@@ -6,7 +6,7 @@
     "MODEL": "{{ infrastructure.model }}",
     "PORT": "8100",
     "BENCHMARK_SCRIPT": "/tmp/benchmark_common.py",
-    "OUTPUT_FILE": "/tmp/{{ pattern_id }}.json",
+    "OUTPUT_FILE": "/tmp/results/{{ pattern_id }}.json",
     "LOG_FILE": "/tmp/vllm_unified_{{ pattern_id }}.log",
     "PID_FILE": "/tmp/vllm_unified_{{ pattern_id }}.pid",
     "PROMPT_TOKENS": "{{ prompt_tokens }}",
@@ -35,12 +35,16 @@
     {
       "id": "02-cleanup-gpu",
       "name": "Cleanup GPU Memory",
-      "description": "Terminate existing vLLM processes",
+      "description": "Terminate existing vLLM processes and ensure GPU memory is released",
       "commands": [
+        "echo '[INFO] Cleaning up GPU memory...'",
         "sudo pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true",
         "sudo pkill -9 -f 'ray::' 2>/dev/null || true",
-        "echo '[INFO] Waiting for GPU memory to be released...'",
-        "sleep 15",
+        "sudo pkill -9 -f 'python' 2>/dev/null || true",
+        "sleep 5",
+        "nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | while read pid; do [ -n \"$pid\" ] && sudo kill -9 $pid 2>/dev/null || true; done",
+        "echo '[INFO] Waiting for GPU memory to be released (max 60 seconds)...'",
+        "for i in $(seq 1 12); do MAX_MEM=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1); if [ -z \"$MAX_MEM\" ] || [ \"$MAX_MEM\" -lt 1000 ]; then echo '[OK] GPU memory released'; break; fi; [ $((i % 3)) -eq 0 ] && echo '[INFO] Waiting... GPU memory: '$MAX_MEM' MiB ('$i'/12)'; sleep 5; done",
         "nvidia-smi --query-gpu=index,memory.used --format=csv,noheader || true"
       ]
     },
@@ -75,7 +79,7 @@
       "name": "Health Check",
       "description": "Verify vLLM server is ready",
       "commands": [
-        "for i in $(seq 1 120); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo '[OK] vLLM server ready'; exit 0; fi; [ $((i % 20)) -eq 0 ] && echo '[INFO] Waiting... ('$i'/120)'; sleep 1; done; echo '[ERROR] Health check timeout'; cat {{"{{"}}LOG_FILE{{"}}"}} | tail -50; exit 1"
+        "HEALTH_OK=false; for i in $(seq 1 120); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo '[OK] vLLM server ready'; HEALTH_OK=true; break; fi; [ $((i % 20)) -eq 0 ] && echo '[INFO] Waiting... ('$i'/120)'; sleep 1; done; if [ \"$HEALTH_OK\" = \"false\" ]; then echo '[ERROR] Health check timeout'; cat {{"{{"}}LOG_FILE{{"}}"}} | tail -50; false; fi"
       ]
     },
 {% if measurement_type == 'online' %}
@@ -84,7 +88,9 @@
       "name": "Run Benchmark ({{ prompt_tokens }} tokens, c={{ concurrency }})",
       "description": "Run benchmark (warmup={{ warmup_iterations }}, measurement={{ measurement_iterations }}, c={{ concurrency }})",
       "commands": [
-        "python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode unified --backend none --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
+        "sudo mkdir -p /tmp/results && sudo chown ubuntu:ubuntu /tmp/results",
+        "sudo rm -f {{"{{"}}OUTPUT_FILE{{"}}"}}",
+        "sudo -u ubuntu env MLFLOW_EXPERIMENT_TIMESTAMP=\"${MLFLOW_EXPERIMENT_TIMESTAMP:-}\" python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode unified --backend none --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri arn:aws:sagemaker:us-east-1:776010787911:mlflow-tracking-server/nixl-efa-mlflow2 --mlflow-experiment-name nixl-efa-phase1 --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]
     }
@@ -94,7 +100,9 @@
       "name": "Run Benchmark (Offline, {{ prompt_tokens }} tokens)",
       "description": "Run offline benchmark (Python API direct)",
       "commands": [
-        "python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type offline --model {{"{{"}}MODEL{{"}}"}} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri http://localhost:5000 --mlflow-experiment-name nixl-efa-tai-phase-{{"{{"}}PHASE{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
+        "sudo mkdir -p /tmp/results && sudo chown ubuntu:ubuntu /tmp/results",
+        "sudo rm -f {{"{{"}}OUTPUT_FILE{{"}}"}}",
+        "sudo -u ubuntu python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type offline --model {{"{{"}}MODEL{{"}}"}} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri arn:aws:sagemaker:us-east-1:776010787911:mlflow-tracking-server/nixl-efa-mlflow2 --mlflow-experiment-name nixl-efa-phase1 --phase {{"{{"}}PHASE{{"}}"}} --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]
     }

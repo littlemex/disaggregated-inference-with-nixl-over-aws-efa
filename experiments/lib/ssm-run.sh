@@ -52,11 +52,33 @@ ssm_run_command() {
 
     log "Command ID: $command_id"
 
-    # 完了待ち
+    # 完了待ち（ポーリング）
     log "Waiting for command to complete..."
-    aws ssm wait command-executed \
-        --command-id "$command_id" \
-        --instance-id "$instance_id"
+    local max_attempts=120  # 120 * 30s = 3600s = 60 minutes
+    local attempt=0
+    local status="Pending"
+
+    while [ $attempt -lt $max_attempts ]; do
+        status=$(aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$instance_id" \
+            --query 'Status' \
+            --output text 2>/dev/null || echo "Pending")
+
+        if [ "$status" = "Success" ] || [ "$status" = "Failed" ] || [ "$status" = "Cancelled" ] || [ "$status" = "TimedOut" ]; then
+            break
+        fi
+
+        attempt=$((attempt + 1))
+        if [ $((attempt % 10)) -eq 0 ]; then
+            log "Still waiting... ($attempt/$max_attempts, Status: $status)"
+        fi
+        sleep 30
+    done
+
+    if [ $attempt -eq $max_attempts ]; then
+        error "Command timed out after 60 minutes"
+    fi
 
     # 結果取得
     log "Retrieving command output..."
@@ -75,7 +97,8 @@ ssm_run_command() {
         echo "$output" | jq -r '.[1]'  # stdout
         return 0
     else
-        error "Command failed with status: $status"
+        # Don't exit on error - just log and return non-zero
+        echo -e "${RED}[ERROR]${NC} Command failed with status: $status" >&2
         echo "$output" | jq -r '.[2]'  # stderr
         return 1
     fi

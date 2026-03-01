@@ -1,0 +1,109 @@
+{# baseline-fi-rdm-pingpong.json.jinja2 - EFA レイテンシ測定テンプレート #}
+{# 変数: PHASE, PATTERN_ID, OUTPUT_DIR, TIMESTAMP, NODE_ROLE, PEER_IP #}
+{# ノード: Server = Node2, Client = Node1 #}
+{# 測定サイズ: 64, 1024, 65536, 1048576 bytes #}
+{
+  "name": "L0-Baseline: fi_rdm_pingpong - EFA Latency ({{ node_role | default('client') }})",
+  "description": "EFA レイテンシの測定 ({{ node_role | default('client') }} side, 複数メッセージサイズ)",
+  "variables": {
+    "PHASE": "{{ phase }}",
+    "PATTERN_ID": "{{ pattern_id }}",
+    "OUTPUT_DIR": "{{ output_dir | default('/tmp/results') }}",
+    "OUTPUT_FILE": "{{ output_dir | default('/tmp/results') }}/{{ pattern_id }}.json",
+    "TIMESTAMP": "{{ timestamp }}",
+    "NODE_ROLE": "{{ node_role | default('client') }}",
+    "PEER_IP": "{{ peer_ip | default('') }}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-tools",
+      "name": "Verify fi_rdm_pingpong availability",
+      "commands": [
+        "echo '[INFO] Checking for fi_rdm_pingpong...'",
+        "mkdir -p {{"{{"}}OUTPUT_DIR{{"}}"}}",
+        "if ! command -v fi_rdm_pingpong >/dev/null 2>&1; then echo '[WARNING] fi_rdm_pingpong not found'; fi",
+        "echo '[OK] Tool verification complete'"
+      ]
+    },
+{% if node_role == 'server' %}
+    {
+      "id": "02-run-pingpong-64",
+      "name": "Run fi_rdm_pingpong server (size=64)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong server (size=64)...'",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1; then timeout 60 fi_rdm_pingpong -p efa -S 64 2>&1 | tee /tmp/pingpong_64_raw.txt || echo '[WARNING] pingpong server exited'; else echo '[SKIP] fi_rdm_pingpong not available' > /tmp/pingpong_64_raw.txt; fi"
+      ]
+    },
+    {
+      "id": "03-run-pingpong-1k",
+      "name": "Run fi_rdm_pingpong server (size=1024)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong server (size=1024)...'",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1; then timeout 60 fi_rdm_pingpong -p efa -S 1024 2>&1 | tee /tmp/pingpong_1k_raw.txt || echo '[WARNING] pingpong server exited'; else echo '[SKIP]' > /tmp/pingpong_1k_raw.txt; fi"
+      ]
+    },
+    {
+      "id": "04-run-pingpong-64k",
+      "name": "Run fi_rdm_pingpong server (size=65536)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong server (size=65536)...'",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1; then timeout 60 fi_rdm_pingpong -p efa -S 65536 2>&1 | tee /tmp/pingpong_64k_raw.txt || echo '[WARNING] pingpong server exited'; else echo '[SKIP]' > /tmp/pingpong_64k_raw.txt; fi"
+      ]
+    },
+    {
+      "id": "05-run-pingpong-1m",
+      "name": "Run fi_rdm_pingpong server (size=1048576)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong server (size=1048576)...'",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1; then timeout 60 fi_rdm_pingpong -p efa -S 1048576 2>&1 | tee /tmp/pingpong_1m_raw.txt || echo '[WARNING] pingpong server exited'; else echo '[SKIP]' > /tmp/pingpong_1m_raw.txt; fi"
+      ]
+    },
+{% else %}
+    {
+      "id": "02-run-pingpong-64",
+      "name": "Run fi_rdm_pingpong client (size=64)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong client (size=64) connecting to {{"{{"}}PEER_IP{{"}}"}}...'",
+        "sleep 3",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then fi_rdm_pingpong -p efa -S 64 {{"{{"}}PEER_IP{{"}}"}} 2>&1 | tee /tmp/pingpong_64_raw.txt || echo '[WARNING] pingpong client exited with error'; else echo '[SKIP]' > /tmp/pingpong_64_raw.txt; fi"
+      ]
+    },
+    {
+      "id": "03-run-pingpong-1k",
+      "name": "Run fi_rdm_pingpong client (size=1024)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong client (size=1024) connecting to {{"{{"}}PEER_IP{{"}}"}}...'",
+        "sleep 3",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then fi_rdm_pingpong -p efa -S 1024 {{"{{"}}PEER_IP{{"}}"}} 2>&1 | tee /tmp/pingpong_1k_raw.txt || echo '[WARNING] pingpong client exited with error'; else echo '[SKIP]' > /tmp/pingpong_1k_raw.txt; fi"
+      ]
+    },
+    {
+      "id": "04-run-pingpong-64k",
+      "name": "Run fi_rdm_pingpong client (size=65536)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong client (size=65536) connecting to {{"{{"}}PEER_IP{{"}}"}}...'",
+        "sleep 3",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then fi_rdm_pingpong -p efa -S 65536 {{"{{"}}PEER_IP{{"}}"}} 2>&1 | tee /tmp/pingpong_64k_raw.txt || echo '[WARNING] pingpong client exited with error'; else echo '[SKIP]' > /tmp/pingpong_64k_raw.txt; fi"
+      ]
+    },
+    {
+      "id": "05-run-pingpong-1m",
+      "name": "Run fi_rdm_pingpong client (size=1048576)",
+      "commands": [
+        "echo '[INFO] Starting fi_rdm_pingpong client (size=1048576) connecting to {{"{{"}}PEER_IP{{"}}"}}...'",
+        "sleep 3",
+        "if command -v fi_rdm_pingpong >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then fi_rdm_pingpong -p efa -S 1048576 {{"{{"}}PEER_IP{{"}}"}} 2>&1 | tee /tmp/pingpong_1m_raw.txt || echo '[WARNING] pingpong client exited with error'; else echo '[SKIP]' > /tmp/pingpong_1m_raw.txt; fi"
+      ]
+    },
+{% endif %}
+    {
+      "id": "06-collect-results",
+      "name": "Collect latency results into JSON",
+      "commands": [
+        "echo '[INFO] Collecting results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
+        "python3 /tmp/scripts/collect_fi_rdm_pingpong.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --node-role {{"{{"}}NODE_ROLE{{"}}"}} --peer-ip '{{"{{"}}PEER_IP{{"}}"}}'",
+        "echo '[OK] fi_rdm_pingpong baseline measurement complete'"
+      ]
+    }
+  ]
+}
