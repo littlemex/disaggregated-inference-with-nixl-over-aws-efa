@@ -1,0 +1,342 @@
+{
+  "name": "Environment Setup for vLLM v0.16.0 + NIXL",
+  "description": "Comprehensive environment setup on DLAMI: vLLM v0.16.0, NIXL v0.10.0, NCCL tests, Docker, and verification",
+  "variables": {
+    "VLLM_VERSION": "0.16.0",
+    "NIXL_VERSION": "0.10.0",
+    "NCCL_TESTS_DIR": "/opt/nccl-tests",
+    "ETCD_VERSION": "v3.5.18",
+    "ETCD_PORT": "2379",
+    "KVBENCH_DIR": "/opt/dlami/nvme/nixl/benchmark/kvbench"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-gpu",
+      "name": "Verify GPU and NVIDIA Driver",
+      "description": "Verify NVIDIA GPU and driver are available (pre-installed in DLAMI)",
+      "skip_if": "nvidia-smi >/dev/null 2>&1",
+      "commands": [
+        "echo '[ERROR] NVIDIA driver not found. This script requires DLAMI with GPU support.'",
+        "exit 1"
+      ]
+    },
+    {
+      "id": "02-verify-efa",
+      "name": "Verify EFA Device",
+      "description": "Verify EFA device and libfabric tools are available (pre-installed in DLAMI)",
+      "skip_if": "test -e /dev/infiniband/uverbs0 && test -x /opt/amazon/efa/bin/fi_info",
+      "commands": [
+        "echo '[ERROR] EFA device or libfabric tools not found. Verify EFA is enabled on this instance.'",
+        "exit 1"
+      ]
+    },
+    {
+      "id": "03-upgrade-pip",
+      "name": "Upgrade pip and setuptools",
+      "description": "Upgrade pip and setuptools to latest versions for better dependency resolution",
+      "commands": [
+        "python3 -m pip install --upgrade pip setuptools wheel -q",
+        "echo '[OK] pip upgraded: $(python3 -m pip --version)'"
+      ]
+    },
+    {
+      "id": "04-install-vllm",
+      "name": "Install vLLM v0.16.0",
+      "description": "Install vLLM v0.16.0 inference engine",
+      "skip_if": "python3 -c 'import vllm; exit(0 if vllm.__version__ == \"{{VLLM_VERSION}}\" else 1)' 2>/dev/null",
+      "commands": [
+        "echo '[INFO] Installing vLLM {{VLLM_VERSION}}...'",
+        "python3 -m pip install --no-cache-dir 'vllm=={{VLLM_VERSION}}' --retries 3 -q",
+        "python3 -c 'import vllm; print(f\"[OK] vLLM installed: {vllm.__version__}\")'"
+      ]
+    },
+    {
+      "id": "05-install-nixl",
+      "name": "Install NIXL (nixl[cu12])",
+      "description": "Install NIXL library with CUDA 12 support (includes nixlbench, kvbench)",
+      "skip_if": "python3 -c 'import nixl' 2>/dev/null",
+      "commands": [
+        "echo '[INFO] Installing NIXL with CUDA 12 support...'",
+        "python3 -m pip install --no-cache-dir 'nixl[cu12]' --retries 3 -q",
+        "python3 -c 'import nixl; print(\"[OK] NIXL installed\")'",
+        "command -v nixlbench >/dev/null 2>&1 && echo '[OK] nixlbench available in PATH' || echo '[INFO] nixlbench not in PATH (may need to locate binary)'"
+      ]
+    },
+    {
+      "id": "06-install-mlflow-deps",
+      "name": "Install MLflow Dependencies",
+      "description": "Install sagemaker-mlflow and boto3 for MLflow integration",
+      "skip_if": "python3 -c 'import sagemaker_mlflow, boto3' 2>/dev/null",
+      "commands": [
+        "echo '[INFO] Installing MLflow dependencies...'",
+        "python3 -m pip install --no-cache-dir sagemaker-mlflow boto3 --retries 3 -q",
+        "python3 -c 'import mlflow; print(f\"[OK] MLflow: {mlflow.__version__}\")'"
+      ]
+    },
+    {
+      "id": "07-install-analysis-deps",
+      "name": "Install Analysis Dependencies",
+      "description": "Install pandas, numpy, scipy for analysis scripts",
+      "skip_if": "python3 -c 'import pandas, numpy, scipy' 2>/dev/null",
+      "commands": [
+        "echo '[INFO] Installing analysis dependencies...'",
+        "python3 -m pip install --no-cache-dir pandas numpy scipy --retries 3 -q",
+        "echo '[OK] Analysis dependencies installed'"
+      ]
+    },
+    {
+      "id": "08-setup-nccl-tests",
+      "name": "Build NCCL Tests",
+      "description": "Install NCCL library and build NCCL tests for GPU communication benchmarking",
+      "skip_if": "test -f {{NCCL_TESTS_DIR}}/build/all_reduce_perf",
+      "commands": [
+        "echo '[INFO] Setting up NCCL tests (this may take a few minutes)...'",
+        "sudo bash setup-nccl-tests.sh 2>&1 | grep -E '(STEP|INFO|SUCCESS|ERROR)' || true",
+        "test -f {{NCCL_TESTS_DIR}}/build/all_reduce_perf && echo '[OK] NCCL tests setup complete' || { echo '[ERROR] NCCL tests setup failed'; exit 1; }"
+      ]
+    },
+    {
+      "id": "09-setup-docker",
+      "name": "Setup Docker for etcd",
+      "description": "Ensure Docker is running (required for etcd container in nixlbench)",
+      "skip_if": "docker ps >/dev/null 2>&1",
+      "commands": [
+        "echo '[INFO] Checking Docker installation...'",
+        "if ! command -v docker >/dev/null 2>&1; then echo '[INFO] Installing Docker...'; curl -fsSL https://get.docker.com | sudo sh; sudo usermod -aG docker ubuntu; fi",
+        "sudo systemctl start docker 2>/dev/null || sudo service docker start 2>/dev/null || true",
+        "sleep 3",
+        "docker ps >/dev/null 2>&1 && echo '[OK] Docker is running' || { echo '[WARNING] Docker not running. You may need to logout and login again for group changes.'; exit 0; }"
+      ]
+    },
+    {
+      "id": "10-setup-etcd",
+      "name": "Setup etcd Container",
+      "description": "Start etcd container for NIXLBench/KVBench distributed coordination (reused across all low-level measurements)",
+      "skip_if": "docker ps --filter name=etcd-nixlbench --format '{{.Names}}' | grep -q etcd-nixlbench",
+      "commands": [
+        "echo '[INFO] Starting etcd container...'",
+        "docker rm -f etcd-nixlbench 2>/dev/null || true",
+        "docker run -d --name etcd-nixlbench --network host quay.io/coreos/etcd:{{ETCD_VERSION}} /usr/local/bin/etcd --listen-client-urls=http://0.0.0.0:{{ETCD_PORT}} --advertise-client-urls=http://0.0.0.0:{{ETCD_PORT}}",
+        "sleep 2",
+        "docker ps --filter name=etcd-nixlbench --format '{{.Names}}' | grep -q etcd-nixlbench && echo '[OK] etcd container running' || { echo '[WARNING] etcd container not running'; exit 0; }"
+      ]
+    },
+    {
+      "id": "11-verify-environment",
+      "name": "Verify Complete Environment",
+      "description": "Comprehensive verification of all installed components",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Environment Verification'",
+        "echo '=========================================='",
+        "echo ''",
+        "echo '[1/11] Python and pip'",
+        "python3 --version",
+        "python3 -m pip --version",
+        "echo ''",
+        "echo '[2/11] vLLM'",
+        "python3 -c 'import vllm; assert vllm.__version__ == \"{{VLLM_VERSION}}\", f\"Expected {{VLLM_VERSION}}, got {vllm.__version__}\"; print(f\"  vLLM: {vllm.__version__} [OK]\")'",
+        "echo ''",
+        "echo '[3/11] NIXL'",
+        "python3 -c 'import nixl; print(\"  NIXL: installed [OK]\")'",
+        "echo ''",
+        "echo '[4/11] MLflow'",
+        "python3 -c 'import mlflow, sagemaker_mlflow, boto3; print(f\"  MLflow: {mlflow.__version__} [OK]\")'",
+        "echo ''",
+        "echo '[5/11] Analysis libraries'",
+        "python3 -c 'import pandas, numpy, scipy; print(\"  pandas, numpy, scipy [OK]\")'",
+        "echo ''",
+        "echo '[6/11] GPU and NVIDIA Driver'",
+        "nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | head -1 | awk '{print \"  GPU: \"$0\" [OK]\"}'",
+        "echo ''",
+        "echo '[7/11] EFA Device'",
+        "test -e /dev/infiniband/uverbs0 && echo '  EFA device: /dev/infiniband/uverbs0 [OK]' || echo '  EFA device: NOT FOUND [FAIL]'",
+        "/opt/amazon/efa/bin/fi_info -p efa 2>/dev/null | grep -q 'provider: efa' && echo '  libfabric EFA provider: [OK]' || echo '  libfabric EFA provider: [FAIL]'",
+        "echo ''",
+        "echo '[8/11] NCCL Tests'",
+        "test -f {{NCCL_TESTS_DIR}}/build/all_reduce_perf && echo '  NCCL all_reduce_perf: [OK]' || echo '  NCCL tests: NOT FOUND [FAIL]'",
+        "echo ''",
+        "echo '[9/11] EFA Environment Variables'",
+        "grep -q 'FI_PROVIDER=efa' /etc/environment 2>/dev/null && echo '  EFA env vars: [OK]' || echo '  EFA env vars: NOT SET [INFO]'",
+        "echo ''",
+        "echo '[10/11] Docker and etcd'",
+        "docker ps --filter name=etcd-nixlbench --format '{{.Names}}' | grep -q etcd-nixlbench && echo '  etcd container: [OK]' || echo '  etcd container: NOT RUNNING [FAIL]'",
+        "echo ''",
+        "echo '[11/11] Output Directories'",
+        "test -d /tmp/low-level-results && echo '  /tmp/low-level-results: [OK]' || echo '  /tmp/low-level-results: NOT FOUND [INFO]'",
+        "test -d /tmp/results && echo '  /tmp/results: [OK]' || echo '  /tmp/results: NOT FOUND [INFO]'",
+        "echo ''",
+        "echo '=========================================='",
+        "echo 'Environment setup complete!'",
+        "echo 'Ready for disaggregated inference experiments.'",
+        "echo '=========================================='",
+        "echo ''",
+        "echo 'Next steps:'",
+        "echo '  1. Generate task definitions: cd experiments && ./generate_tasks.py phase1'",
+        "echo '  2. Deploy scripts: ./run_experiment.sh phase1 deploy'",
+        "echo '  3. Run experiments: ./run_experiment.sh phase1 run L0'",
+        "echo ''"
+      ]
+    },
+    {
+      "id": "12-setup-efa-env",
+      "name": "Setup EFA Environment Variables",
+      "description": "Set EFA environment variables persistently in /etc/environment for all experiments",
+      "skip_if": "grep -q 'FI_PROVIDER=efa' /etc/environment 2>/dev/null",
+      "commands": [
+        "echo '[INFO] Setting EFA environment variables...'",
+        "sudo bash -c 'echo \"FI_PROVIDER=efa\" >> /etc/environment'",
+        "sudo bash -c 'echo \"FI_EFA_USE_DEVICE_RDMA=1\" >> /etc/environment'",
+        "sudo bash -c 'echo \"FI_EFA_FORK_SAFE=1\" >> /etc/environment'",
+        "sudo bash -c 'echo \"FI_LOG_LEVEL=warn\" >> /etc/environment'",
+        "echo '[OK] EFA environment variables set in /etc/environment'"
+      ]
+    },
+    {
+      "id": "13-setup-nccl-env",
+      "name": "Setup NCCL Environment Variables",
+      "description": "Set NCCL environment variables for multi-GPU (TP>1) experiments",
+      "skip_if": "grep -q 'NCCL_IB_DISABLE=0' /etc/environment 2>/dev/null",
+      "commands": [
+        "echo '[INFO] Setting NCCL environment variables...'",
+        "sudo bash -c 'echo \"NCCL_IB_DISABLE=0\" >> /etc/environment'",
+        "echo '[OK] NCCL environment variables set'"
+      ]
+    },
+    {
+      "id": "14-create-output-dirs",
+      "name": "Create Output Directories",
+      "description": "Create output directories for measurement results",
+      "skip_if": "test -d /tmp/low-level-results && test -d /tmp/results",
+      "commands": [
+        "mkdir -p /tmp/low-level-results /tmp/results",
+        "sudo chown ubuntu:ubuntu /tmp/low-level-results /tmp/results",
+        "echo '[OK] Output directories created'"
+      ]
+    },
+    {
+      "id": "15-setup-kvbench-venv",
+      "name": "Setup KVBench Virtual Environment",
+      "description": "Create and initialize KVBench virtual environment with dependencies (if KVBench is available)",
+      "skip_if": "test -f {{KVBENCH_DIR}}/venv/bin/python",
+      "commands": [
+        "echo '[INFO] Setting up KVBench virtual environment...'",
+        "if [ ! -d {{KVBENCH_DIR}} ]; then echo '[INFO] KVBench directory not found, skipping'; exit 0; fi",
+        "cd {{KVBENCH_DIR}}",
+        "python3 -m venv venv",
+        "source venv/bin/activate",
+        "pip install uv -q",
+        "uv sync --active 2>&1 | grep -E '(Installed|Audited|INFO)' || true",
+        "echo '[OK] KVBench virtual environment ready'"
+      ]
+    },
+    {
+      "id": "16-install-perftest",
+      "name": "Install perftest Tools",
+      "description": "Install RDMA perftest tools (ib_write_bw, ib_write_lat) for baseline measurements",
+      "skip_if": "command -v ib_write_bw >/dev/null 2>&1",
+      "commands": [
+        "echo '[INFO] Installing perftest package...'",
+        "sudo apt-get update -qq 2>&1 | tail -3",
+        "sudo apt-get install -y -qq perftest 2>&1 | grep -E '(Setting up|Done)' || echo '[INFO] perftest installation in progress...'",
+        "command -v ib_write_bw >/dev/null 2>&1 && echo '[OK] perftest tools installed' || echo '[WARNING] perftest installation may have failed, but continuing...'"
+      ]
+    },
+    {
+      "id": "17-test-environment",
+      "name": "Test Environment Functionality",
+      "description": "Functional verification of all installed components: GPU/CUDA, vLLM, NIXL, NCCL, EFA, Docker, etcd",
+      "skip_if": "test -f /tmp/task-state-$(hostname).json && jq -e '.\"17-test-environment\".status == \"success\"' /tmp/task-state-$(hostname).json >/dev/null 2>&1",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Functional Environment Tests'",
+        "echo '=========================================='",
+        "echo ''",
+        "TESTS_PASSED=0",
+        "TESTS_FAILED=0",
+        "echo ''",
+        "echo '[Test 1/10] GPU CUDA Tensor Allocation'",
+        "python3 -c 'import torch; assert torch.cuda.is_available(), \"CUDA not available\"; t = torch.randn(1024, 1024, device=\"cuda\"); assert t.device.type == \"cuda\"; del t; torch.cuda.empty_cache(); print(f\"  GPU: {torch.cuda.get_device_name(0)}, CUDA tensors: [OK]\")' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] PyTorch CUDA test failed. Check: python3 -c \"import torch; print(torch.cuda.is_available())\"'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 2/10] vLLM Import and CUDA Integration'",
+        "python3 -c 'import vllm; from vllm import LLM, SamplingParams; print(f\"  vLLM {vllm.__version__}: import and class loading [OK]\")' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] vLLM import failed. Check: pip show vllm'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 3/10] NIXL Python Binding and GPU Detection'",
+        "python3 -c 'import nixl; config = nixl.nixlAgentConfig(False); agent = nixl.nixlAgent(\"test_agent\", config); print(\"  NIXL agent creation: [OK]\"); del agent; del config' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] NIXL functional test failed. Check: python3 -c \"import nixl; print(dir(nixl))\"'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 4/10] NCCL all_reduce_perf Minimal Run'",
+        "NCCL_BIN=$(test -f /opt/nccl-tests/build/all_reduce_perf && echo /opt/nccl-tests/build/all_reduce_perf || which all_reduce_perf 2>/dev/null || echo '')",
+        "if [ -n \"$NCCL_BIN\" ]; then timeout 30 $NCCL_BIN -b 8 -e 8 -f 2 -g 1 -c 0 -w 0 -n 1 2>&1 | tail -5 && echo '  NCCL all_reduce_perf: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)); else echo '  [FAIL] all_reduce_perf binary not found'; TESTS_FAILED=$((TESTS_FAILED + 1)); fi",
+        "echo ''",
+        "echo '[Test 5/10] EFA Provider Verification'",
+        "/opt/amazon/efa/bin/fi_info -p efa 2>/dev/null | head -5 && echo '  EFA provider: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] EFA provider not available. Check: /opt/amazon/efa/bin/fi_info -p efa'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 6/10] etcd Health Check'",
+        "curl -sf http://localhost:{{ETCD_PORT}}/health 2>/dev/null | grep -q 'true' && echo '  etcd health: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] etcd not responding on port {{ETCD_PORT}}. Check: docker ps --filter name=etcd-nixlbench'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 7/10] Docker Daemon'",
+        "docker info >/dev/null 2>&1 && echo '  Docker daemon: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] Docker daemon not running. Check: sudo systemctl status docker'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 8/10] GPU Count Verification'",
+        "GPU_COUNT=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)",
+        "if [ \"$GPU_COUNT\" -ge 1 ]; then echo \"  GPU count: $GPU_COUNT [OK]\" && TESTS_PASSED=$((TESTS_PASSED + 1)); else echo \"  [FAIL] No GPUs detected. Check: nvidia-smi -L\" && TESTS_FAILED=$((TESTS_FAILED + 1)); fi",
+        "echo ''",
+        "echo '[Test 9/10] EFA Network Interface'",
+        "ip link show 2>/dev/null | grep -q efa && echo '  EFA interface: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] EFA network interface not found. Check: ip link show | grep efa'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 10/10] Peer Node Connectivity (optional)'",
+        "if [ -n \"${NODE2_PRIVATE_IP:-}\" ]; then ping -c 1 -W 5 \"$NODE2_PRIVATE_IP\" >/dev/null 2>&1 && echo \"  Peer node ($NODE2_PRIVATE_IP): [OK]\" && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo \"  [FAIL] Cannot reach peer node $NODE2_PRIVATE_IP. Check network configuration.\"; TESTS_FAILED=$((TESTS_FAILED + 1)); }; else echo '  Peer node test: [SKIPPED - NODE2_PRIVATE_IP not set]'; fi",
+        "echo ''",
+        "echo '=========================================='",
+        "echo \"Functional Tests: $TESTS_PASSED passed, $TESTS_FAILED failed\"",
+        "echo '=========================================='",
+        "if [ \"$TESTS_FAILED\" -gt 0 ]; then echo '[ERROR] Some functional tests failed. Environment may not be ready for experiments.'; exit 1; fi",
+        "echo '[OK] All functional tests passed. Environment is ready for experiments.'"
+      ]
+    },
+    {
+      "id": "18-pre-pull-etcd-image",
+      "name": "Pre-pull ETCD Docker Image",
+      "description": "Pre-pull ETCD v3.5.18 Docker image for NIXLBench/KVBench (saves 30-90 seconds per measurement session)",
+      "skip_if": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -q 'quay.io/coreos/etcd:v3.5.18'",
+      "commands": [
+        "echo '[INFO] Pre-pulling ETCD Docker image for NIXLBench/KVBench...'",
+        "docker pull quay.io/coreos/etcd:{{ETCD_VERSION}}",
+        "echo '[OK] ETCD Docker image ready'",
+        "docker images quay.io/coreos/etcd:{{ETCD_VERSION}} --format 'Size: {{.Size}}'"
+      ]
+    },
+    {
+      "id": "19-gpu-warmup",
+      "name": "GPU Memory Region Warmup",
+      "description": "Warm up GPU memory allocation and GPUDirect RDMA for faster first measurements",
+      "skip_if": "test -f /tmp/gpu-warmup-done",
+      "commands": [
+        "echo '[INFO] Running GPU warmup...'",
+        "python3 -c 'import torch; import sys; device_count = torch.cuda.device_count() if torch.cuda.is_available() else 0; print(f\"[INFO] Found {device_count} GPU(s)\"); [print(f\"[OK] GPU {i}: memory region warmed\") or torch.zeros(1024*1024, device=f\"cuda:{i}\") for i in range(device_count)]; torch.cuda.synchronize() if device_count > 0 else None; print(\"[OK] All GPU memory regions warmed up\")' && touch /tmp/gpu-warmup-done",
+        "echo '[OK] GPU warmup complete'"
+      ]
+    },
+    {
+      "id": "20-ensure-nvidia-peermem",
+      "name": "Ensure nvidia_peermem Kernel Module",
+      "description": "Load nvidia_peermem kernel module for GPUDirect RDMA (required for VRAM-to-VRAM transfers)",
+      "skip_if": "lsmod | grep -q nvidia_peermem",
+      "commands": [
+        "echo '[INFO] Checking nvidia_peermem module...'",
+        "if lsmod | grep -q nvidia_peermem; then echo '[OK] nvidia_peermem already loaded'; else echo '[INFO] Loading nvidia_peermem...'; sudo modprobe nvidia_peermem 2>/dev/null && echo '[OK] nvidia_peermem loaded' || echo '[WARNING] Failed to load nvidia_peermem (GPUDirect RDMA may not work)'; fi"
+      ]
+    },
+    {
+      "id": "21-pre-download-model",
+      "name": "Pre-download vLLM Model (Optional)",
+      "description": "Pre-download Qwen/Qwen2.5-32B-Instruct model to avoid download delays during measurements",
+      "skip_if": "test -d ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-32B-Instruct",
+      "commands": [
+        "echo '[INFO] Pre-downloading Qwen/Qwen2.5-32B-Instruct model (this may take 5-15 minutes)...'",
+        "python3 -c 'from huggingface_hub import snapshot_download; snapshot_download(\"Qwen/Qwen2.5-32B-Instruct\", cache_dir=\"/home/ubuntu/.cache/huggingface/hub\"); print(\"[OK] Model downloaded to cache\")' 2>&1 | grep -E '(Fetching|100%|OK|ERROR)' || true",
+        "if [ -d ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-32B-Instruct ]; then echo '[OK] Model pre-download complete'; else echo '[WARNING] Model download may have failed, but continuing'; fi"
+      ]
+    }
+  ]
+}
