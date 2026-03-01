@@ -733,7 +733,7 @@ export NODE1_PRIVATE=172.31.21.225
 export NODE2_PRIVATE=172.31.16.45
 
 # セットアップディレクトリに移動
-cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/experiments/setup
+cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/setup
 
 # Node1 でセットアップ実行
 ./runner.sh run-node1 tasks/setup-v0.16.0-environment.json
@@ -742,7 +742,18 @@ cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/experiments/se
 ./runner.sh run-node2 tasks/setup-v0.16.0-environment.json
 ```
 
-**セットアップ開始時刻**: 2026-03-01 20:32:00
+**セットアップ開始時刻**: 2026-03-01 20:32:38
+
+**実行状況**:
+- Node1（i-0076abddaeb0e3532）: 実行中
+- Node2（i-0584014b563632406）: 実行中
+- 推定完了時刻: 20:47-52 頃（Task 21 のモデルダウンロードに 10-15 分）
+
+**実行タスク**:
+- Task 18: ETCD image pre-pull（GPU warmup 前の準備）
+- Task 19: GPU warmup（nvidia-smi で GPU 初期化）
+- Task 21: Model download（Qwen2.5-32B-Instruct ~60GB）
+- Task 20: nvidia_peermem（WARNING 想定、スキップ可能）
 
 ### 追加実験: Cross-Layers KV-Cache Layout
 
