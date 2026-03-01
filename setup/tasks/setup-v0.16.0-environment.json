@@ -23,7 +23,7 @@
       "id": "02-verify-efa",
       "name": "Verify EFA Device",
       "description": "Verify EFA device and libfabric tools are available (pre-installed in DLAMI)",
-      "skip_if": "test -e /dev/infiniband/uverbs0 && command -v fi_info >/dev/null 2>&1",
+      "skip_if": "test -e /dev/infiniband/uverbs0 && test -x /opt/amazon/efa/bin/fi_info",
       "commands": [
         "echo '[ERROR] EFA device or libfabric tools not found. Verify EFA is enabled on this instance.'",
         "exit 1"
@@ -154,7 +154,7 @@
         "echo ''",
         "echo '[7/8] EFA Device'",
         "test -e /dev/infiniband/uverbs0 && echo '  EFA device: /dev/infiniband/uverbs0 [OK]' || echo '  EFA device: NOT FOUND [FAIL]'",
-        "fi_info -p efa 2>/dev/null | grep -q 'provider: efa' && echo '  libfabric EFA provider: [OK]' || echo '  libfabric EFA provider: [FAIL]'",
+        "/opt/amazon/efa/bin/fi_info -p efa 2>/dev/null | grep -q 'provider: efa' && echo '  libfabric EFA provider: [OK]' || echo '  libfabric EFA provider: [FAIL]'",
         "echo ''",
         "echo '[8/8] NCCL Tests'",
         "test -f {{NCCL_TESTS_DIR}}/build/all_reduce_perf && echo '  NCCL all_reduce_perf: [OK]' || echo '  NCCL tests: NOT FOUND [FAIL]'",
