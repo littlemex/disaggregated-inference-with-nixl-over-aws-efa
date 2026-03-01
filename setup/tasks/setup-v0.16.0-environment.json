@@ -262,7 +262,7 @@
         "python3 -c 'import vllm; from vllm import LLM, SamplingParams; print(f\"  vLLM {vllm.__version__}: import and class loading [OK]\")' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] vLLM import failed. Check: pip show vllm'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
         "echo ''",
         "echo '[Test 3/7] NIXL Python Binding and GPU Detection'",
-        "python3 -c 'import nixl; agent = nixl.NixlAgent(\"test_agent\"); print(\"  NIXL agent creation: [OK]\"); del agent' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] NIXL functional test failed. Check: python3 -c \"import nixl; print(dir(nixl))\"'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "python3 -c 'import nixl; agent = nixl.nixlAgent(\"test_agent\"); print(\"  NIXL agent creation: [OK]\"); del agent' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] NIXL functional test failed. Check: python3 -c \"import nixl; print(dir(nixl))\"'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
         "echo ''",
         "echo '[Test 4/7] NCCL all_reduce_perf Minimal Run'",
         "NCCL_BIN=$(test -f /opt/nccl-tests/build/all_reduce_perf && echo /opt/nccl-tests/build/all_reduce_perf || which all_reduce_perf 2>/dev/null || echo '')",
