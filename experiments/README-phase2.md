@@ -700,15 +700,49 @@ npx cdk deploy phase2-nixl-efa-dev-east-1 \
    - 結果: Node1/Node2 の CREATE_FAILED、ROLLBACK_IN_PROGRESS
    - 対処: ロールバック完了後（20:26:07）、スタック削除
 
-2. **第 2 回試行（実行中）**: 2026-03-01 20:27:45
+2. **第 2 回試行（成功）**: 2026-03-01 20:27:45 - 20:31:07
    - AZ: us-east-1b（明示的に指定）
    - コマンド: `npx cdk deploy phase2-nixl-efa-dev-east-1 -c projectPrefix=phase2 -c availabilityZone=us-east-1b --require-approval never`
-   - ステータス: デプロイ中
+   - デプロイ時間: 約 202 秒（3 分 24 秒）
+   - ステータス: **CREATE_COMPLETE**
+
+**デプロイ結果**:
+- **Node1 Public IP**: 54.166.143.117
+- **Node1 Private IP**: 172.31.21.225
+- **Node2 Public IP**: 54.145.10.123
+- **Node2 Private IP**: 172.31.16.45
+- **PlacementGroup**: phase2-nixl-efa-dev-east-1-NixlClusterPlacementGroup-BZYOCXXMZ9CU
+- **SecurityGroup**: sg-08606c266c9e48af4
+- **ScriptsBucket**: phase2-nixl-efa-dev-east-1-scriptsbucket40feb4b1-hgshbem2slxa
 
 **トラブルシューティング**:
 - us-east-1a でのキャパシティ不足を検出
 - AWS エラーメッセージに従い、us-east-1b に切り替え
 - `-c availabilityZone=us-east-1b` パラメータで AZ を明示的に指定
+- 第 2 回試行で成功
+
+#### ステップ 3: 環境セットアップ
+
+環境変数を設定し、両ノードで環境セットアップタスクを実行:
+
+```bash
+# 環境変数の設定
+export NODE1_IP=54.166.143.117
+export NODE2_IP=54.145.10.123
+export NODE1_PRIVATE=172.31.21.225
+export NODE2_PRIVATE=172.31.16.45
+
+# セットアップディレクトリに移動
+cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/experiments/setup
+
+# Node1 でセットアップ実行
+./runner.sh run-node1 tasks/setup-v0.16.0-environment.json
+
+# Node2 でセットアップ実行
+./runner.sh run-node2 tasks/setup-v0.16.0-environment.json
+```
+
+**セットアップ開始時刻**: 2026-03-01 20:32:00
 
 ### 追加実験: Cross-Layers KV-Cache Layout
 
