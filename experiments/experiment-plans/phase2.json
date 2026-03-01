@@ -2195,81 +2195,6 @@
       ]
     }
   ],
-  "execution_order": [
-    {
-      "step": 1,
-      "layer": "L0-Baseline",
-      "patterns": [
-        "p2-baseline-fi-info"
-      ],
-      "description": "EFA device verification (prerequisite check)"
-    },
-    {
-      "step": 2,
-      "layer": "L0-Baseline",
-      "patterns": [
-        "p2-baseline-iperf3",
-        "p2-baseline-fi-rdm-pingpong",
-        "p2-baseline-fi-rdm-bw",
-        "p2-baseline-nvidia-smi-basic",
-        "p2-baseline-nvidia-smi-topo",
-        "p2-baseline-nvidia-smi-dmon",
-        "p2-baseline-nccl-test"
-      ],
-      "description": "Network and GPU baseline measurements (parallel execution possible)"
-    },
-    {
-      "step": 3,
-      "layer": "L1-Unified",
-      "patterns": [
-        "p2-unified-*"
-      ],
-      "description": "Unified mode (single node) - TPOT/TTFT/Throughput baseline"
-    },
-    {
-      "step": 4,
-      "layer": [
-        "L2-EFA",
-        "L3-TCP"
-      ],
-      "patterns": [
-        "p2-efa-*-c1",
-        "p2-tcp-*-c1"
-      ],
-      "description": "Disaggregated c=1 measurements (EFA and TCP, parallel execution possible)"
-    },
-    {
-      "step": 5,
-      "layer": [
-        "L2-EFA",
-        "L3-TCP"
-      ],
-      "patterns": [
-        "p2-efa-*-c4",
-        "p2-efa-*-c16",
-        "p2-tcp-*-c4",
-        "p2-tcp-*-c16"
-      ],
-      "description": "Disaggregated concurrency sweep (c=4,16)"
-    },
-    {
-      "step": 6,
-      "layer": "L4-Analysis",
-      "patterns": [
-        "p2-analysis-*"
-      ],
-      "description": "Cross-validation: TPOT separation, bimodality detection, Proxy overhead"
-    },
-    {
-      "step": 7,
-      "layer": "L5-LowLevel",
-      "adhoc": true,
-      "patterns": [
-        "p2-ll-*"
-      ],
-      "description": "Low-level measurements (adhoc only, run individually when E2E measurements show anomalies)"
-    }
-  ],
   "analysis_plan": {
     "cross_experiment_comparisons": [
       {
@@ -2658,8 +2583,8 @@
     }
   ],
   "estimated_duration": {
-    "total_minutes": 600,
-    "total_hours": 10.0,
+    "total_minutes": 620,
+    "total_hours": 10.5,
     "breakdown": {
       "L0_baseline": {
         "minutes": 60,
@@ -2712,7 +2637,7 @@
     "vllm_startup_overhead": {
       "total_restarts": 5,
       "total_startups": 6,
-      "estimated_minutes_range": "53-73",
+      "estimated_minutes_range": "51-75",
       "average_minutes": 63,
       "per_startup": {
         "unified": "5-7 min",
