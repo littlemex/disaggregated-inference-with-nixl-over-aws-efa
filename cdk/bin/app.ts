@@ -82,7 +82,22 @@ function getStackTags(app: App): Record<string, string> {
 // MLflow Stack
 // ========================================
 
-const projectPrefix = app.node.tryGetContext("projectPrefix");
+// Get or generate unique deployment ID to avoid stack name collisions
+let projectPrefix = app.node.tryGetContext("projectPrefix");
+if (!projectPrefix) {
+  // Check for environment variable DEPLOYMENT_ID
+  projectPrefix = process.env.DEPLOYMENT_ID;
+
+  if (!projectPrefix) {
+    // Auto-generate short random ID (6 characters)
+    projectPrefix = Math.random().toString(36).substring(2, 8);
+    console.warn(`[WARNING] No projectPrefix or DEPLOYMENT_ID specified. Auto-generated: ${projectPrefix}`);
+    console.warn(`[WARNING] To use a specific prefix, set: -c projectPrefix=<your-prefix> or DEPLOYMENT_ID=<your-id>`);
+  } else {
+    console.log(`[INFO] Using DEPLOYMENT_ID from environment: ${projectPrefix}`);
+  }
+}
+
 const vpcId = app.node.tryGetContext("vpcId");
 const createVpc = app.node.tryGetContext("createVpc") === "true";
 const trackingServerSize = app.node.tryGetContext("trackingServerSize");
