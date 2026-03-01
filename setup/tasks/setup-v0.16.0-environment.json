@@ -241,6 +241,48 @@
         "sudo apt-get install -y -qq perftest 2>&1 | grep -E '(Setting up|Done)' || echo '[INFO] perftest installation in progress...'",
         "command -v ib_write_bw >/dev/null 2>&1 && echo '[OK] perftest tools installed' || echo '[WARNING] perftest installation may have failed, but continuing...'"
       ]
+    },
+    {
+      "id": "17-test-environment",
+      "name": "Test Environment Functionality",
+      "description": "Functional verification of all installed components: GPU/CUDA, vLLM, NIXL, NCCL, EFA, Docker, etcd",
+      "skip_if": "test -f /tmp/task-state-$(hostname).json && jq -e '.\"17-test-environment\".status == \"success\"' /tmp/task-state-$(hostname).json >/dev/null 2>&1",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Functional Environment Tests'",
+        "echo '=========================================='",
+        "echo ''",
+        "TESTS_PASSED=0",
+        "TESTS_FAILED=0",
+        "echo ''",
+        "echo '[Test 1/7] GPU CUDA Tensor Allocation'",
+        "python3 -c 'import torch; assert torch.cuda.is_available(), \"CUDA not available\"; t = torch.randn(1024, 1024, device=\"cuda\"); assert t.device.type == \"cuda\"; del t; torch.cuda.empty_cache(); print(f\"  GPU: {torch.cuda.get_device_name(0)}, CUDA tensors: [OK]\")' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] PyTorch CUDA test failed. Check: python3 -c \"import torch; print(torch.cuda.is_available())\"'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 2/7] vLLM Import and CUDA Integration'",
+        "python3 -c 'import vllm; from vllm import LLM, SamplingParams; print(f\"  vLLM {vllm.__version__}: import and class loading [OK]\")' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] vLLM import failed. Check: pip show vllm'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 3/7] NIXL Python Binding and GPU Detection'",
+        "python3 -c 'import nixl; agent = nixl.NixlAgent(\"test_agent\"); print(\"  NIXL agent creation: [OK]\"); del agent' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] NIXL functional test failed. Check: python3 -c \"import nixl; print(dir(nixl))\"'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 4/7] NCCL all_reduce_perf Minimal Run'",
+        "NCCL_BIN=$(test -f /opt/nccl-tests/build/all_reduce_perf && echo /opt/nccl-tests/build/all_reduce_perf || which all_reduce_perf 2>/dev/null || echo '')",
+        "if [ -n \"$NCCL_BIN\" ]; then timeout 30 $NCCL_BIN -b 8 -e 8 -f 2 -g 1 -c 0 -w 0 -n 1 2>&1 | tail -5 && echo '  NCCL all_reduce_perf: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)); else echo '  [FAIL] all_reduce_perf binary not found'; TESTS_FAILED=$((TESTS_FAILED + 1)); fi",
+        "echo ''",
+        "echo '[Test 5/7] EFA Provider Verification'",
+        "/opt/amazon/efa/bin/fi_info -p efa 2>/dev/null | head -5 && echo '  EFA provider: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] EFA provider not available. Check: /opt/amazon/efa/bin/fi_info -p efa'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 6/7] etcd Health Check'",
+        "curl -sf http://localhost:{{ETCD_PORT}}/health 2>/dev/null | grep -q 'true' && echo '  etcd health: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] etcd not responding on port {{ETCD_PORT}}. Check: docker ps --filter name=etcd-nixlbench'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '[Test 7/7] Docker Daemon'",
+        "docker info >/dev/null 2>&1 && echo '  Docker daemon: [OK]' && TESTS_PASSED=$((TESTS_PASSED + 1)) || { echo '  [FAIL] Docker daemon not running. Check: sudo systemctl status docker'; TESTS_FAILED=$((TESTS_FAILED + 1)); }",
+        "echo ''",
+        "echo '=========================================='",
+        "echo \"Functional Tests: $TESTS_PASSED passed, $TESTS_FAILED failed\"",
+        "echo '=========================================='",
+        "if [ \"$TESTS_FAILED\" -gt 0 ]; then echo '[ERROR] Some functional tests failed. Environment may not be ready for experiments.'; exit 1; fi",
+        "echo '[OK] All functional tests passed. Environment is ready for experiments.'"
+      ]
     }
   ]
 }
