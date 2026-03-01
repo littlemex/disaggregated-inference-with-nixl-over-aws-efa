@@ -786,8 +786,16 @@ export MLFLOW_EXPERIMENT_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 ./run_experiment.sh phase2 run all
 ```
 
-**測定開始予定**: 2026-03-01 20:59:00
-**推定完了時刻**: 2026-03-02 07:29:00（約 10.5 時間後）
+**測定開始時刻**: 2026-03-01 21:01:47
+**推定完了時刻**: 2026-03-02 07:31:47（約 10.5 時間後）
+**MLFLOW_EXPERIMENT_TIMESTAMP**: 20260301-210020
+
+**測定進行状況**:
+- [完了] S3 デプロイ: スクリプトとタスクファイルをアップロード
+- [実行中] L0-Baseline: Pattern 1/8 完了（p2-baseline-fi-info）
+- [待機中] L1-Unified, L2-EFA, L3-TCP, L4-Analysis
+
+**ログファイル**: `/tmp/phase2-measurement-final.log`
 
 ### 追加実験: Cross-Layers KV-Cache Layout
 
