@@ -83,13 +83,22 @@ aws ssm send-command \
 sleep 2
 log "[OK] Temporary directory created: $TMP_DIR"
 
-# Copy task_runner.sh and task JSON to S3 (if S3 bucket is configured) or directly via SSM
-log "[2/4] Uploading task_runner.sh and task JSON..."
+# Copy task_runner.sh, task JSON, and scripts to S3 (if S3 bucket is configured) or directly via SSM
+log "[2/4] Uploading task_runner.sh, task JSON, and helper scripts..."
 
 # For simplicity, we'll embed the files in the SSM command
 # Read task_runner.sh and task JSON
 TASK_RUNNER_CONTENT=$(cat "$TASK_RUNNER" | base64 -w 0)
 TASK_JSON_CONTENT=$(cat "${SCRIPT_DIR}/${TASK_JSON}" | base64 -w 0)
+
+# Read setup-nccl-tests.sh if it exists
+NCCL_SCRIPT="${SCRIPT_DIR}/scripts/setup-nccl-tests.sh"
+if [ -f "$NCCL_SCRIPT" ]; then
+    NCCL_SCRIPT_CONTENT=$(cat "$NCCL_SCRIPT" | base64 -w 0)
+    NCCL_UPLOAD_CMD="\"echo '$NCCL_SCRIPT_CONTENT' | base64 -d > $TMP_DIR/setup-nccl-tests.sh\","
+else
+    NCCL_UPLOAD_CMD=""
+fi
 
 # Upload files via SSM
 UPLOAD_CMD_ID=$(aws ssm send-command \
@@ -98,7 +107,9 @@ UPLOAD_CMD_ID=$(aws ssm send-command \
     --parameters "commands=[
         \"echo '$TASK_RUNNER_CONTENT' | base64 -d > $TMP_DIR/task_runner.sh\",
         \"echo '$TASK_JSON_CONTENT' | base64 -d > $TMP_DIR/$(basename $TASK_JSON)\",
+        $NCCL_UPLOAD_CMD
         \"chmod +x $TMP_DIR/task_runner.sh\",
+        \"test -f $TMP_DIR/setup-nccl-tests.sh && chmod +x $TMP_DIR/setup-nccl-tests.sh || true\",
         \"echo '[OK] Files uploaded to $TMP_DIR'\"
     ]" \
     --output text \

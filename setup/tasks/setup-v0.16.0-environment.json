@@ -86,16 +86,12 @@
     {
       "id": "08-setup-nccl-tests",
       "name": "Build NCCL Tests",
-      "description": "Clone and build NCCL tests for GPU communication benchmarking",
+      "description": "Install NCCL library and build NCCL tests for GPU communication benchmarking",
       "skip_if": "test -f {{NCCL_TESTS_DIR}}/build/all_reduce_perf",
       "commands": [
-        "echo '[INFO] Building NCCL tests...'",
-        "sudo mkdir -p {{NCCL_TESTS_DIR}}",
-        "sudo chown ubuntu:ubuntu {{NCCL_TESTS_DIR}}",
-        "cd {{NCCL_TESTS_DIR}}",
-        "if [ ! -d .git ]; then git clone https://github.com/NVIDIA/nccl-tests.git .; fi",
-        "make -j$(nproc) 2>&1 | grep -E '(Building|Compiling|Linking|error|Error)' || true",
-        "test -f build/all_reduce_perf && echo '[OK] NCCL tests built successfully' || { echo '[ERROR] NCCL tests build failed'; exit 1; }"
+        "echo '[INFO] Setting up NCCL tests (this may take a few minutes)...'",
+        "sudo bash setup-nccl-tests.sh 2>&1 | grep -E '(STEP|INFO|SUCCESS|ERROR)' || true",
+        "test -f {{NCCL_TESTS_DIR}}/build/all_reduce_perf && echo '[OK] NCCL tests setup complete' || { echo '[ERROR] NCCL tests setup failed'; exit 1; }"
       ]
     },
     {
