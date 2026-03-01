@@ -2583,6 +2583,7 @@
     }
   ],
   "estimated_duration": {
+    "_comment": "total_minutes includes pure measurement time (560 min) + vllm startup overhead (avg 63 min). Rounded to 620 for estimation (actual: 623).",
     "total_minutes": 620,
     "total_hours": 10.5,
     "breakdown": {
@@ -2635,6 +2636,7 @@
       }
     },
     "vllm_startup_overhead": {
+      "_comment": "total_startups = all vLLM startups (Step 2-7). total_restarts = restarts excluding initial startup (Step 3-7).",
       "total_restarts": 5,
       "total_startups": 6,
       "estimated_minutes_range": "51-75",
