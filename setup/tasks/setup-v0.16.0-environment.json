@@ -57,7 +57,7 @@
       "commands": [
         "echo '[INFO] Installing NIXL with CUDA 12 support...'",
         "python3 -m pip install --no-cache-dir 'nixl[cu12]' --retries 3 -q",
-        "python3 -c 'import nixl; print(f\"[OK] NIXL installed: {nixl.__version__}\")'",
+        "python3 -c 'import nixl; print(\"[OK] NIXL installed\")'",
         "command -v nixlbench >/dev/null 2>&1 && echo '[OK] nixlbench available in PATH' || echo '[INFO] nixlbench not in PATH (may need to locate binary)'"
       ]
     },
