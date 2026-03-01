@@ -293,6 +293,50 @@
         "if [ \"$TESTS_FAILED\" -gt 0 ]; then echo '[ERROR] Some functional tests failed. Environment may not be ready for experiments.'; exit 1; fi",
         "echo '[OK] All functional tests passed. Environment is ready for experiments.'"
       ]
+    },
+    {
+      "id": "18-pre-pull-etcd-image",
+      "name": "Pre-pull ETCD Docker Image",
+      "description": "Pre-pull ETCD v3.5.18 Docker image for NIXLBench/KVBench (saves 30-90 seconds per measurement session)",
+      "skip_if": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -q 'quay.io/coreos/etcd:v3.5.18'",
+      "commands": [
+        "echo '[INFO] Pre-pulling ETCD Docker image for NIXLBench/KVBench...'",
+        "docker pull quay.io/coreos/etcd:{{ETCD_VERSION}}",
+        "echo '[OK] ETCD Docker image ready'",
+        "docker images quay.io/coreos/etcd:{{ETCD_VERSION}} --format 'Size: {{.Size}}'"
+      ]
+    },
+    {
+      "id": "19-gpu-warmup",
+      "name": "GPU Memory Region Warmup",
+      "description": "Warm up GPU memory allocation and GPUDirect RDMA for faster first measurements",
+      "skip_if": "test -f /tmp/gpu-warmup-done",
+      "commands": [
+        "echo '[INFO] Running GPU warmup...'",
+        "python3 -c 'import torch; import sys; device_count = torch.cuda.device_count() if torch.cuda.is_available() else 0; print(f\"[INFO] Found {device_count} GPU(s)\"); [print(f\"[OK] GPU {i}: memory region warmed\") or torch.zeros(1024*1024, device=f\"cuda:{i}\") for i in range(device_count)]; torch.cuda.synchronize() if device_count > 0 else None; print(\"[OK] All GPU memory regions warmed up\")' && touch /tmp/gpu-warmup-done",
+        "echo '[OK] GPU warmup complete'"
+      ]
+    },
+    {
+      "id": "20-ensure-nvidia-peermem",
+      "name": "Ensure nvidia_peermem Kernel Module",
+      "description": "Load nvidia_peermem kernel module for GPUDirect RDMA (required for VRAM-to-VRAM transfers)",
+      "skip_if": "lsmod | grep -q nvidia_peermem",
+      "commands": [
+        "echo '[INFO] Checking nvidia_peermem module...'",
+        "if lsmod | grep -q nvidia_peermem; then echo '[OK] nvidia_peermem already loaded'; else echo '[INFO] Loading nvidia_peermem...'; sudo modprobe nvidia_peermem 2>/dev/null && echo '[OK] nvidia_peermem loaded' || echo '[WARNING] Failed to load nvidia_peermem (GPUDirect RDMA may not work)'; fi"
+      ]
+    },
+    {
+      "id": "21-pre-download-model",
+      "name": "Pre-download vLLM Model (Optional)",
+      "description": "Pre-download Qwen/Qwen2.5-32B-Instruct model to avoid download delays during measurements",
+      "skip_if": "test -d ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-32B-Instruct",
+      "commands": [
+        "echo '[INFO] Pre-downloading Qwen/Qwen2.5-32B-Instruct model (this may take 5-15 minutes)...'",
+        "python3 -c 'from huggingface_hub import snapshot_download; snapshot_download(\"Qwen/Qwen2.5-32B-Instruct\", cache_dir=\"/home/ubuntu/.cache/huggingface/hub\"); print(\"[OK] Model downloaded to cache\")' 2>&1 | grep -E '(Fetching|100%|OK|ERROR)' || true",
+        "if [ -d ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-32B-Instruct ]; then echo '[OK] Model pre-download complete'; else echo '[WARNING] Model download may have failed, but continuing'; fi"
+      ]
     }
   ]
 }
