@@ -637,3 +637,144 @@ Phase 2 の最適化設計は、4 つの Claude Opus 4.6 エージェントに�
 4. **リスクエージェント**: 削減によって見逃す可能性のある異常パターンの評価
 
 各エージェントの分析結果を統合し、統計的妥当性とドメイン知識の両面から最適なパターンセットを決定しました。
+
+---
+
+## Phase 2 実測実行ログ
+
+### 実行日時
+
+2026-03-01
+
+### インフラ構築
+
+#### ステップ 1: 既存スタックの削除
+
+test1 プレフィックスの既存スタックを削除:
+
+```bash
+# スタックの確認
+aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+  --query 'StackSummaries[?contains(StackName, `test1`)].{Name: StackName,Status: StackStatus}' \
+  --output table
+
+# 結果: test1-nixl-efa-dev-east-1, test1-mlflow-prod-east-1
+
+# NIXL EFA スタックの削除
+aws cloudformation delete-stack --stack-name test1-nixl-efa-dev-east-1
+
+# 削除の監視（約 5 分）
+watch -n 10 'aws cloudformation describe-stacks --stack-name test1-nixl-efa-dev-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETED"'
+```
+
+**結果**: 削除完了まで約5-10分（DELETE_IN_PROGRESS → DELETED）
+
+#### ステップ 2: Phase 2 スタックのデプロイ
+
+phase2 プレフィックスで新しいスタックをデプロイ:
+
+```bash
+# 環境変数の設定
+export DEPLOYMENT_ID=phase2
+
+# CDK ディレクトリに移動
+cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/cdk
+
+# スタックのデプロイ
+npx cdk deploy phase2-nixl-efa-dev-east-1 \
+  -c projectPrefix=phase2 \
+  -c instanceType=g6e.12xlarge \
+  --require-approval never
+
+# デプロイ完了まで約10-15分
+```
+
+**デプロイ開始時刻**: 2026-03-01 19:59:56 (削除完了直後)
+
+**デプロイ進行状況**:
+- phase2-mlflow-prod-east-1: CREATE_IN_PROGRESS (約3-5分)
+- phase2-nixl-efa-dev-east-1: 待機中（MLflowスタック完了後）
+
+**デプロイ完了予定**: 約10-15分後（20:10-20:15頃）
+
+### 追加実験: Cross-Layers KV-Cache Layout
+
+Phase 2 には、vLLM v0.16.0 で導入された `enable_cross_layers_blocks` パラメータの効果を検証する追加パターンが含まれます。
+
+#### 背景
+
+PR #33339 (2026-02-05 マージ) により、NixlConnector に cross-layers KV-Cache layout オプションが追加されました。この機能は、全レイヤーの KV-Cache を物理メモリ上で連続配置することで、NIXL 転送時のバッファフラグメンテーションを劇的に削減します。
+
+**通常（デフォルト: False）**: Qwen2.5-32B の 64 レイヤー x 2 (K/V) = 128 個の独立したバッファを個別に転送。転送バッファのフラグメンテーションが発生。
+
+**有効化（True）**: 全レイヤーの KV-Cache を連続した単一ブロックとして配置し、一括転送。フラグメンテーションが 98.8% 削減（34,000 バッファ → 422 バッファ）。
+
+#### 期待される効果
+
+PR #33339 のベンチマーク結果（入力 10240 tokens, 128 リクエスト）:
+- **TTFT**: 11,141ms → 5,227ms（**53% 改善**）
+- **ITL (TPOT)**: 42.78ms → 14.41ms（**66% 改善**）
+- **スループット**: 62,340 → 117,631 tok/s（**89% 向上**）
+- **転送バッファ数**: 34,000 → 422（**98.8% 削減**）
+
+#### 実験パターン
+
+| パターン ID | 比較対象 | 目的 |
+|-----------|---------|------|
+| p2-efa-12k-c1-crosslayers | p2-efa-12k-c1 | Cross-layers layout の TTFT/TPOT 効果測定 |
+
+**選定理由**:
+- 12K tokens (KV-Cache 3.0 GB) でフラグメンテーションの影響が顕著
+- c=1 でノイズが少なく、pure な効果を測定可能
+- EFA (LIBFABRIC) で cross_layers の効果が最大限発揮
+- 既存の p2-efa-12k-c1 と直接比較可能
+
+#### 実行順序への影響
+
+`enable_cross_layers_blocks` は KV-Cache のメモリレイアウトを変更するため、vLLM の再起動が必要です（compatibility hash に含まれ、Prefill/Decode で一致が必要）。
+
+**更新された execution_order**:
+- Step 1: L0-Baseline
+- Step 2: L1-Unified
+- Step 3: L2-EFA standard（enable_cross_layers_blocks=False）
+- **Step 4: L2-EFA standard-crosslayers（enable_cross_layers_blocks=True）** ← 新規追加
+- Step 5: L3-TCP standard
+- Step 6: L2-EFA long_context
+- Step 7: L3-TCP long_context
+- Step 8: L4-Analysis
+
+**追加時間**:
+- 測定時間: 約 5 分（30 反復 + ウォームアップ）
+- vLLM 再起動: 1 回追加（約 10 分）
+- **合計追加時間: 約 15 分**
+
+**Phase 2 合計時間**: 9.5 時間 → **10.0 時間**（15 分追加）
+
+#### 設定方法
+
+`--kv-transfer-config` の `kv_connector_extra_config` に `enable_cross_layers_blocks: "True"` を追加:
+
+```json
+{
+  "kv_connector": "NixlConnector",
+  "kv_role": "kv_both",
+  "kv_connector_extra_config": {
+    "backends": ["LIBFABRIC"],
+    "enable_cross_layers_blocks": "True"
+  }
+}
+```
+
+Prefill/Decode 両方で同一の設定が必要です。
+
+#### 制約事項
+
+- **Attention Backend**: FLASH_ATTN または FLASHINFER のみ対応
+- **KV-Cache Layout**: HND（NixlConnector のデフォルト）
+- **vLLM 再起動必須**: メモリレイアウトが変わるため
+- **デフォルト**: False（無効）
+
+#### 参考資料
+
+- **PR #33339**: https://github.com/vllm-project/vllm/pull/33339
+- **実装コード**: `/home/coder/vllm/vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py`

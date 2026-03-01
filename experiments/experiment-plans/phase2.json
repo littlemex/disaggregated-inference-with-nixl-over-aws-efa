@@ -512,6 +512,21 @@
           ]
         },
         {
+          "id": "p2-efa-12k-c1-crosslayers",
+          "mode": "disaggregated",
+          "transport": "efa",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "enable_cross_layers_blocks": true,
+          "metrics": [
+            "TPOT",
+            "TTFT",
+            "E2E_latency"
+          ],
+          "_comment": "Cross-layers KV cache layout (PR #33339). Compare with p2-efa-12k-c1 to measure TTFT improvement from reduced transfer fragmentation."
+        },
+        {
           "id": "p2-efa-64k-c1",
           "mode": "disaggregated",
           "transport": "efa",
@@ -2488,6 +2503,35 @@
     },
     {
       "step": 4,
+      "layer": "L2-EFA",
+      "context": "standard-crosslayers",
+      "vllm_restart": true,
+      "restart_reason": "enable_cross_layers_blocks change (false → true): KV-Cache memory layout optimization",
+      "vllm_config": {
+        "mode": "disaggregated",
+        "transport": "efa",
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cuda",
+        "nixl_backend": "LIBFABRIC",
+        "max_model_len": 32768,
+        "gpu_memory_utilization": 0.9,
+        "enforce_eager": true,
+        "proxy_required": true,
+        "enable_cross_layers_blocks": true,
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000,
+        "nodes": ["node1(prefill)", "node2(decode)"]
+      },
+      "patterns": [
+        "p2-efa-12k-c1-crosslayers"
+      ],
+      "pattern_count": 1,
+      "description": "EFA with cross-layers KV cache layout (PR #33339). Compare TTFT with p2-efa-12k-c1 to measure transfer fragmentation reduction effect.",
+      "estimated_minutes": 15
+    },
+    {
+      "step": 5,
       "layer": "L3-TCP",
       "context": "standard",
       "vllm_restart": true,
@@ -2526,7 +2570,7 @@
       "estimated_minutes": 55
     },
     {
-      "step": 5,
+      "step": 6,
       "layer": "L2-EFA",
       "context": "long_context",
       "vllm_restart": true,
@@ -2562,7 +2606,7 @@
       "estimated_minutes": 40
     },
     {
-      "step": 6,
+      "step": 7,
       "layer": "L3-TCP",
       "context": "long_context",
       "vllm_restart": true,
@@ -2599,7 +2643,7 @@
       "estimated_minutes": 40
     },
     {
-      "step": 7,
+      "step": 8,
       "layer": "L4-Analysis",
       "vllm_required": false,
       "depends_on": ["L1-Unified", "L2-EFA", "L3-TCP"],
@@ -2614,8 +2658,8 @@
     }
   ],
   "estimated_duration": {
-    "total_minutes": 570,
-    "total_hours": 9.5,
+    "total_minutes": 600,
+    "total_hours": 10.0,
     "breakdown": {
       "L0_baseline": {
         "minutes": 60,
@@ -2633,6 +2677,13 @@
         "patterns": 10,
         "vllm_restarts": 1,
         "max_model_len": 32768
+      },
+      "L2_efa_standard_crosslayers": {
+        "minutes": 15,
+        "patterns": 1,
+        "vllm_restarts": 1,
+        "max_model_len": 32768,
+        "enable_cross_layers_blocks": true
       },
       "L3_tcp_standard": {
         "minutes": 55,
@@ -2659,10 +2710,10 @@
       }
     },
     "vllm_startup_overhead": {
-      "total_restarts": 4,
-      "total_startups": 5,
-      "estimated_minutes_range": "43-63",
-      "average_minutes": 53,
+      "total_restarts": 5,
+      "total_startups": 6,
+      "estimated_minutes_range": "53-73",
+      "average_minutes": 63,
       "per_startup": {
         "unified": "5-7 min",
         "disaggregated_standard": "8-12 min",
