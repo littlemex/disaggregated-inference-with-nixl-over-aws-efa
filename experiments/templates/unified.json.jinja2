@@ -60,6 +60,7 @@
         "export FI_PROVIDER=efa",
         "export FI_EFA_USE_DEVICE_RDMA=1",
 {% endif %}
+        "export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1",
         "nohup python3 -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{"{{"}}TP_SIZE{{"}}"}} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
         "echo $! > {{"{{"}}PID_FILE{{"}}"}}",
         "echo '[OK] Unified server started ({{ 'Prefix Cache ON' if prefix_cache else 'Prefix Cache OFF' }})'"
