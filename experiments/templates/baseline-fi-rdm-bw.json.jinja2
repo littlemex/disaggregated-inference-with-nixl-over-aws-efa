@@ -1,8 +1,9 @@
 {# baseline-fi-rdm-bw.json.jinja2 - EFA RDMA 帯域幅測定テンプレート #}
 {# 変数: PHASE, PATTERN_ID, OUTPUT_DIR, TIMESTAMP, NODE_ROLE, PEER_IP #}
 {# ノード: Server = Node2, Client = Node1 #}
+{# ツール: ib_write_bw (perftest package) #}
 {
-  "name": "L0-Baseline: fi_rdm_bw - EFA RDMA Bandwidth ({{ node_role | default('client') }})",
+  "name": "L0-Baseline: ib_write_bw - EFA RDMA Bandwidth ({{ node_role | default('client') }})",
   "description": "EFA RDMA 帯域幅の測定 ({{ node_role | default('client') }} side)",
   "variables": {
     "PHASE": "{{ phase }}",
@@ -16,34 +17,34 @@
   "tasks": [
     {
       "id": "01-verify-tools",
-      "name": "Verify fi_rdm_bw availability",
+      "name": "Verify ib_write_bw availability",
       "commands": [
-        "echo '[INFO] Checking for fi_rdm_bw...'",
+        "echo '[INFO] Checking for ib_write_bw (perftest)...'",
         "mkdir -p {{"{{"}}OUTPUT_DIR{{"}}"}}",
-        "if ! command -v fi_rdm_bw >/dev/null 2>&1; then echo '[WARNING] fi_rdm_bw not found'; fi",
+        "if ! command -v ib_write_bw >/dev/null 2>&1; then echo '[WARNING] ib_write_bw not found'; fi",
         "echo '[OK] Tool verification complete'"
       ]
     },
 {% if node_role == 'server' %}
     {
       "id": "02-run-measurement",
-      "name": "Run fi_rdm_bw server (wait for client connection)",
+      "name": "Run ib_write_bw server (wait for client connection)",
       "commands": [
-        "echo '[INFO] Starting fi_rdm_bw server...'",
-        "if command -v fi_rdm_bw >/dev/null 2>&1; then timeout 120 fi_rdm_bw -p efa 2>&1 | tee /tmp/fi_rdm_bw_raw.txt || echo '[WARNING] fi_rdm_bw server exited'; else echo '[SKIP] fi_rdm_bw not available' > /tmp/fi_rdm_bw_raw.txt; fi",
-        "echo '[OK] fi_rdm_bw server completed'"
+        "echo '[INFO] Starting ib_write_bw server...'",
+        "if command -v ib_write_bw >/dev/null 2>&1; then timeout 120 ib_write_bw -d rdmap49s0 -F 2>&1 | tee /tmp/ib_write_bw_raw.txt || echo '[WARNING] ib_write_bw server exited'; else echo '[SKIP] ib_write_bw not available' > /tmp/ib_write_bw_raw.txt; fi",
+        "echo '[OK] ib_write_bw server completed'"
       ]
     },
 {% else %}
     {
       "id": "02-run-measurement",
-      "name": "Run fi_rdm_bw client (connect to server)",
+      "name": "Run ib_write_bw client (connect to server)",
       "commands": [
-        "echo '[INFO] Starting fi_rdm_bw client connecting to {{"{{"}}PEER_IP{{"}}"}}...'",
+        "echo '[INFO] Starting ib_write_bw client connecting to {{"{{"}}PEER_IP{{"}}"}}...'",
         "echo '[INFO] Waiting 5 seconds for server to be ready...'",
         "sleep 5",
-        "if command -v fi_rdm_bw >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then fi_rdm_bw -p efa {{"{{"}}PEER_IP{{"}}"}} 2>&1 | tee /tmp/fi_rdm_bw_raw.txt || echo '[WARNING] fi_rdm_bw client exited with error'; else echo '[SKIP] fi_rdm_bw not available or PEER_IP not set' > /tmp/fi_rdm_bw_raw.txt; fi",
-        "echo '[OK] fi_rdm_bw client completed'"
+        "if command -v ib_write_bw >/dev/null 2>&1 && [ -n '{{"{{"}}PEER_IP{{"}}"}}' ]; then ib_write_bw -d rdmap49s0 -F {{"{{"}}PEER_IP{{"}}"}} 2>&1 | tee /tmp/ib_write_bw_raw.txt || echo '[WARNING] ib_write_bw client exited with error'; else echo '[SKIP] ib_write_bw not available or PEER_IP not set' > /tmp/ib_write_bw_raw.txt; fi",
+        "echo '[OK] ib_write_bw client completed'"
       ]
     },
 {% endif %}
@@ -52,8 +53,8 @@
       "name": "Collect bandwidth results into JSON",
       "commands": [
         "echo '[INFO] Collecting results into {{"{{"}}OUTPUT_FILE{{"}}"}}...'",
-        "python3 /tmp/scripts/collect_fi_rdm_bw.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --node-role {{"{{"}}NODE_ROLE{{"}}"}} --peer-ip '{{"{{"}}PEER_IP{{"}}"}}'",
-        "echo '[OK] fi_rdm_bw baseline measurement complete'"
+        "python3 /tmp/scripts/collect_ib_write_bw.py --pattern-id {{"{{"}}PATTERN_ID{{"}}"}} --phase {{"{{"}}PHASE{{"}}"}} --timestamp {{"{{"}}TIMESTAMP{{"}}"}} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --node-role {{"{{"}}NODE_ROLE{{"}}"}} --peer-ip '{{"{{"}}PEER_IP{{"}}"}}'",
+        "echo '[OK] ib_write_bw baseline measurement complete'"
       ]
     }
   ]

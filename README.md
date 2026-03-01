@@ -198,6 +198,42 @@ aws s3 rb s3://<mlflow-bucket-name> --force
 - **ML Framework**: vLLM, PyTorch
 - **Communication Library**: NIXL (Network Interface for XPU Layers)
 
+## 既知の課題と今後の改善点
+
+### L0-Baseline EFA パフォーマンス測定ツールの互換性
+
+**課題**:
+- EFA (Elastic Fabric Adapter) と InfiniBand Verbs の API 非互換性により、標準的な perftest ツール（`ib_write_bw`, `ib_write_lat`）が EFA デバイスで動作しません
+- エラー: `Unable to create QP. Failed to create QP. Couldn't create IB resources`
+
+**原因**:
+- InfiniBand Verbs API 用のツール（perftest パッケージ）は EFA の libfabric API と互換性がありません
+- EFA は AWS 独自の RDMA ネットワークアーキテクチャで、libfabric API を使用します
+
+**代替手段**:
+- `fi_info`: EFA デバイス情報取得（動作確認済み）
+- `/opt/amazon/efa/bin/fi_pingpong`: EFA レイテンシ測定（動作確認済み）
+- NCCL tests: GPU 間通信ベンチマーク（動作確認済み）
+
+**今後の対応**:
+1. libfabric をソースからビルドして `fi_rdm_bw`/`fi_rdm_pingpong` を生成
+2. EFA SDK の最新版に含まれる可能性のある perftest ツールを確認
+3. 当面は L1-L5（vLLM ベンチマーク）を優先実行し、L0-Baseline は参考値として扱う
+
+**回避策（2026-03-01）**:
+- experiments/templates/baseline-fi-rdm-bw.json.jinja2: `ib_write_bw` を使用（EFA で動作せず）
+- experiments/templates/baseline-fi-rdm-pingpong.json.jinja2: `ib_write_lat` を使用（EFA で動作せず）
+- 測定結果は「SKIP」として JSON 出力され、実験は正常に継続されます
+
+### 測定優先順位
+
+1. **L1-Unified** (25 パターン): vLLM 統合モード - 最優先
+2. **L2-EFA** (25 パターン): EFA disaggregated モード
+3. **L3-TCP** (25 パターン): TCP disaggregated モード
+4. **L4-Analysis** (3 パターン): 分析スクリプト
+5. **L5-LowLevel** (25 パターン): 低レベルネットワーク測定
+6. **L0-Baseline** (8 パターン): ベースライン測定（参考値、時間があれば実施）
+
 ## 参考資料
 
 - [AWS EFA Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html)
