@@ -2398,5 +2398,288 @@
     "analysis": "task-definitions/phase2/analysis/",
     "low_level": "task-definitions/phase2/low-level/"
   },
-  "generate_tasks_script": "task-definitions/phase2/generate_tasks.py"
+  "generate_tasks_script": "task-definitions/phase2/generate_tasks.py",
+  "execution_order": [
+    {
+      "step": 1,
+      "layer": "L0-Baseline",
+      "vllm_required": false,
+      "patterns": [
+        "p2-baseline-fi-info",
+        "p2-baseline-fi-rdm-bw",
+        "p2-baseline-fi-rdm-pingpong",
+        "p2-baseline-iperf3",
+        "p2-baseline-nccl-test",
+        "p2-baseline-nvidia-smi-basic",
+        "p2-baseline-nvidia-smi-dmon",
+        "p2-baseline-nvidia-smi-topo"
+      ],
+      "pattern_count": 8,
+      "description": "Network and GPU baseline verification",
+      "estimated_minutes": 60
+    },
+    {
+      "step": 2,
+      "layer": "L1-Unified",
+      "vllm_restart": true,
+      "vllm_config": {
+        "mode": "unified",
+        "max_model_len": 131072,
+        "gpu_memory_utilization": 0.9,
+        "enforce_eager": true,
+        "proxy_required": false,
+        "port": 8000,
+        "nodes": ["node1"]
+      },
+      "patterns": [
+        "p2-unified-1k-c1",
+        "p2-unified-1k-c16",
+        "p2-unified-4k-c1",
+        "p2-unified-4k-c4",
+        "p2-unified-12k-c1",
+        "p2-unified-12k-c4",
+        "p2-unified-12k-c16",
+        "p2-unified-32k-c1",
+        "p2-unified-32k-c16",
+        "p2-unified-64k-c1",
+        "p2-unified-64k-c4",
+        "p2-unified-128k-c1"
+      ],
+      "pattern_count": 12,
+      "description": "Unified mode: all prompts (1K-128K), single vLLM instance with max_model_len=131072",
+      "estimated_minutes": 120
+    },
+    {
+      "step": 3,
+      "layer": "L2-EFA",
+      "context": "standard",
+      "vllm_restart": true,
+      "restart_reason": "mode change (unified → disagg) + max_model_len change (131072 → 32768)",
+      "vllm_config": {
+        "mode": "disaggregated",
+        "transport": "efa",
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cuda",
+        "nixl_backend": "LIBFABRIC",
+        "max_model_len": 32768,
+        "gpu_memory_utilization": 0.9,
+        "enforce_eager": true,
+        "proxy_required": true,
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000,
+        "nodes": ["node1(prefill)", "node2(decode)"]
+      },
+      "patterns": [
+        "p2-efa-1k-c1",
+        "p2-efa-1k-c4",
+        "p2-efa-1k-c16",
+        "p2-efa-4k-c1",
+        "p2-efa-12k-c1",
+        "p2-efa-12k-c4",
+        "p2-efa-12k-c16",
+        "p2-efa-32k-c1",
+        "p2-efa-32k-c4",
+        "p2-efa-32k-c16"
+      ],
+      "pattern_count": 10,
+      "description": "EFA standard context (1K-32K): LIBFABRIC backend, kv_buffer_device=cuda",
+      "estimated_minutes": 50
+    },
+    {
+      "step": 4,
+      "layer": "L3-TCP",
+      "context": "standard",
+      "vllm_restart": true,
+      "restart_reason": "transport change (EFA → TCP): kv_buffer_device cuda→cpu, backend LIBFABRIC→UCX",
+      "vllm_config": {
+        "mode": "disaggregated",
+        "transport": "tcp",
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cpu",
+        "nixl_backend": "UCX",
+        "ucx_tls": "tcp,self,sm",
+        "max_model_len": 32768,
+        "gpu_memory_utilization": 0.9,
+        "enforce_eager": true,
+        "proxy_required": true,
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000,
+        "nodes": ["node1(prefill)", "node2(decode)"]
+      },
+      "patterns": [
+        "p2-tcp-1k-c1",
+        "p2-tcp-1k-c4",
+        "p2-tcp-1k-c16",
+        "p2-tcp-4k-c1",
+        "p2-tcp-4k-c16",
+        "p2-tcp-12k-c1",
+        "p2-tcp-12k-c4",
+        "p2-tcp-12k-c16",
+        "p2-tcp-32k-c1",
+        "p2-tcp-32k-c4",
+        "p2-tcp-32k-c16"
+      ],
+      "pattern_count": 11,
+      "description": "TCP standard context (1K-32K): UCX backend, kv_buffer_device=cpu",
+      "estimated_minutes": 55
+    },
+    {
+      "step": 5,
+      "layer": "L2-EFA",
+      "context": "long_context",
+      "vllm_restart": true,
+      "restart_reason": "transport change (TCP → EFA) + max_model_len change (32768 → 131072) + YaRN activation",
+      "vllm_config": {
+        "mode": "disaggregated",
+        "transport": "efa",
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cuda",
+        "nixl_backend": "LIBFABRIC",
+        "max_model_len": 131072,
+        "gpu_memory_utilization": 0.9,
+        "enforce_eager": true,
+        "proxy_required": true,
+        "requires_yarn": true,
+        "rope_scaling": {
+          "type": "yarn",
+          "factor": 4.0,
+          "original_max_position_embeddings": 32768
+        },
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000,
+        "nodes": ["node1(prefill)", "node2(decode)"]
+      },
+      "patterns": [
+        "p2-efa-64k-c1",
+        "p2-efa-64k-c4",
+        "p2-efa-128k-c1"
+      ],
+      "pattern_count": 3,
+      "description": "EFA long context (64K-128K): YaRN enabled, max_model_len=131072",
+      "estimated_minutes": 40
+    },
+    {
+      "step": 6,
+      "layer": "L3-TCP",
+      "context": "long_context",
+      "vllm_restart": true,
+      "restart_reason": "transport change (EFA → TCP): kv_buffer_device cuda→cpu, backend LIBFABRIC→UCX",
+      "vllm_config": {
+        "mode": "disaggregated",
+        "transport": "tcp",
+        "kv_connector": "NixlConnector",
+        "kv_buffer_device": "cpu",
+        "nixl_backend": "UCX",
+        "ucx_tls": "tcp,self,sm",
+        "max_model_len": 131072,
+        "gpu_memory_utilization": 0.9,
+        "enforce_eager": true,
+        "proxy_required": true,
+        "requires_yarn": true,
+        "rope_scaling": {
+          "type": "yarn",
+          "factor": 4.0,
+          "original_max_position_embeddings": 32768
+        },
+        "prefill_port": 8100,
+        "decode_port": 8200,
+        "proxy_port": 8000,
+        "nodes": ["node1(prefill)", "node2(decode)"]
+      },
+      "patterns": [
+        "p2-tcp-64k-c1",
+        "p2-tcp-64k-c4",
+        "p2-tcp-128k-c1"
+      ],
+      "pattern_count": 3,
+      "description": "TCP long context (64K-128K): YaRN enabled, max_model_len=131072",
+      "estimated_minutes": 40
+    },
+    {
+      "step": 7,
+      "layer": "L4-Analysis",
+      "vllm_required": false,
+      "depends_on": ["L1-Unified", "L2-EFA", "L3-TCP"],
+      "patterns": [
+        "p2-analysis-bimodality-detection",
+        "p2-analysis-proxy-overhead",
+        "p2-analysis-tpot-separation"
+      ],
+      "pattern_count": 3,
+      "description": "Post-measurement analysis using L1/L2/L3 results",
+      "estimated_minutes": 180
+    }
+  ],
+  "estimated_duration": {
+    "total_minutes": 570,
+    "total_hours": 9.5,
+    "breakdown": {
+      "L0_baseline": {
+        "minutes": 60,
+        "patterns": 8,
+        "vllm_required": false
+      },
+      "L1_unified": {
+        "minutes": 120,
+        "patterns": 12,
+        "vllm_restarts": 1,
+        "max_model_len": 131072
+      },
+      "L2_efa_standard": {
+        "minutes": 50,
+        "patterns": 10,
+        "vllm_restarts": 1,
+        "max_model_len": 32768
+      },
+      "L3_tcp_standard": {
+        "minutes": 55,
+        "patterns": 11,
+        "vllm_restarts": 1,
+        "max_model_len": 32768
+      },
+      "L2_efa_long_context": {
+        "minutes": 40,
+        "patterns": 3,
+        "vllm_restarts": 1,
+        "max_model_len": 131072
+      },
+      "L3_tcp_long_context": {
+        "minutes": 40,
+        "patterns": 3,
+        "vllm_restarts": 1,
+        "max_model_len": 131072
+      },
+      "L4_analysis": {
+        "minutes": 180,
+        "patterns": 3,
+        "vllm_required": false
+      }
+    },
+    "vllm_startup_overhead": {
+      "total_restarts": 4,
+      "total_startups": 5,
+      "estimated_minutes_range": "43-63",
+      "average_minutes": 53,
+      "per_startup": {
+        "unified": "5-7 min",
+        "disaggregated_standard": "8-12 min",
+        "disaggregated_long_context": "11-16 min"
+      }
+    },
+    "optimization_savings": {
+      "vs_worst_case_minutes": "337-607",
+      "vs_worst_case_hours": "5.6-10.1",
+      "vs_naive_layer_order_minutes": "12-87",
+      "vs_naive_layer_order_hours": "0.2-1.5"
+    },
+    "phase1_comparison": {
+      "phase1_total_hours": "25.4-25.6",
+      "phase2_total_hours": "9.3-10.5",
+      "reduction_hours": "15-16",
+      "reduction_percentage": 60
+    }
+  }
 }
