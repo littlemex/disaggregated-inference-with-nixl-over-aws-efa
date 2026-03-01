@@ -744,16 +744,50 @@ cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/setup
 
 **セットアップ開始時刻**: 2026-03-01 20:32:38
 
-**実行状況**:
-- Node1（i-0076abddaeb0e3532）: 実行中
-- Node2（i-0584014b563632406）: 実行中
-- 推定完了時刻: 20:47-52 頃（Task 21 のモデルダウンロードに 10-15 分）
+**セットアップ完了時刻**: 2026-03-01 20:39:38（所要時間: 約 7 分）
 
-**実行タスク**:
-- Task 18: ETCD image pre-pull（GPU warmup 前の準備）
-- Task 19: GPU warmup（nvidia-smi で GPU 初期化）
-- Task 21: Model download（Qwen2.5-32B-Instruct ~60GB）
-- Task 20: nvidia_peermem（WARNING 想定、スキップ可能）
+**セットアップ結果**: ✅ 成功
+
+両ノードで以下を検証完了:
+- ✅ MLflow 3.10.0
+- ✅ GPU: NVIDIA A10G, Driver 580.126.09, 23GB VRAM
+- ✅ EFA device: /dev/infiniband/uverbs0
+- ✅ libfabric EFA provider
+- ✅ NCCL all_reduce_perf
+- ✅ etcd container 起動中
+- ✅ 環境変数設定完了
+- ✅ 出力ディレクトリ作成完了
+
+**実行したタスク**:
+- Task 01-17: 基本環境セットアップ（vLLM, NIXL, AWS SDK 等）
+- Task 18: ETCD image pre-pull
+- Task 19: GPU warmup
+- Task 20: nvidia_peermem（スキップ）
+- Task 21: Model download（Qwen2.5-32B-Instruct）
+
+#### ステップ 4: Phase 2 測定実行
+
+環境セットアップが完了したので、Phase 2 の測定を実行します：
+
+```bash
+# 実験ディレクトリに移動
+cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/experiments
+
+# Phase 2 のタスクを生成
+./generate_tasks.py phase2
+
+# Phase 2 の全測定を実行
+export NODE1_IP=54.166.143.117
+export NODE2_IP=54.145.10.123
+export NODE1_PRIVATE=172.31.21.225
+export NODE2_PRIVATE=172.31.16.45
+export MLFLOW_EXPERIMENT_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+./run_experiment.sh phase2 run all
+```
+
+**測定開始予定**: 2026-03-01 20:59:00
+**推定完了時刻**: 2026-03-02 07:29:00（約 10.5 時間後）
 
 ### 追加実験: Cross-Layers KV-Cache Layout
 
