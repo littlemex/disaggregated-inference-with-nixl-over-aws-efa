@@ -222,8 +222,20 @@ def generate_task_json(
     else:
         backend = pattern.get("backend", "unified")
 
-    # Merge common settings with pattern overrides
-    merged = merge_settings(common, pattern)
+    # Merge common settings, layer vllm_config, and pattern overrides
+    # Priority: common < layer vllm_config < pattern
+    merged = {**common}
+
+    # Apply layer vllm_config (overrides common)
+    layer_vllm_config = layer.get("vllm_config", {})
+    for key, value in layer_vllm_config.items():
+        merged[key] = value
+
+    # Apply pattern overrides (highest priority)
+    for key, value in pattern.items():
+        if key != "id":
+            merged[key] = value
+
     merged = compute_derived_values(merged, infrastructure)
 
     # Template variables
