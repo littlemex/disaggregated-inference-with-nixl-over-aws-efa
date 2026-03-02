@@ -47,7 +47,7 @@
         "sudo pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true",
         "sudo pkill -9 -f 'ray::' 2>/dev/null || true",
         "sudo pkill -9 -f 'disagg_proxy' 2>/dev/null || true",
-        "sudo pkill -9 -f 'python' 2>/dev/null || true",
+        "pgrep -f 'python.*vllm\\|python.*disagg_proxy' 2>/dev/null | xargs -r sudo kill -9 2>/dev/null || true",
         "sleep 5",
         "nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | while read pid; do [ -n \"$pid\" ] && sudo kill -9 $pid 2>/dev/null || true; done",
         "echo '[INFO] Waiting for GPU memory to be released (max 60 seconds)...'",
