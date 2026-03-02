@@ -57,8 +57,6 @@
 {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}
         "export NCCL_DEBUG=INFO",
         "export NCCL_IB_DISABLE=0",
-        "export FI_PROVIDER=efa",
-        "export FI_EFA_USE_DEVICE_RDMA=1",
 {% endif %}
         "export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1",
         "nohup python3 -m vllm.entrypoints.openai.api_server --model {{"{{"}}MODEL{{"}}"}} --disable-log-requests --trust-remote-code --port {{"{{"}}PORT{{"}}"}} {% if infrastructure.tp_size is defined and infrastructure.tp_size > 1 %}--tensor-parallel-size {{"{{"}}TP_SIZE{{"}}"}} {% endif %}--gpu-memory-utilization {{"{{"}}GPU_MEMORY_UTIL{{"}}"}} --max-num-batched-tokens {{"{{"}}MAX_BATCHED_TOKENS{{"}}"}} --enable-chunked-prefill --enforce-eager --max-model-len {{"{{"}}MAX_MODEL_LEN{{"}}"}} {{ '--enable-prefix-caching' if prefix_cache else '--no-enable-prefix-caching' }} > {{"{{"}}LOG_FILE{{"}}"}} 2>&1 &",
@@ -77,10 +75,10 @@
     },
     {
       "id": "05-health-check",
-      "name": "Health Check",
-      "description": "Verify vLLM server is ready",
+      "name": "Health Check (OOM Detection)",
+      "description": "Verify vLLM server is ready with OOM/error early detection",
       "commands": [
-        "HEALTH_OK=false; for i in $(seq 1 120); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo '[OK] vLLM server ready'; HEALTH_OK=true; break; fi; [ $((i % 20)) -eq 0 ] && echo '[INFO] Waiting... ('$i'/120)'; sleep 1; done; if [ \"$HEALTH_OK\" = \"false\" ]; then echo '[ERROR] Health check timeout'; cat {{"{{"}}LOG_FILE{{"}}"}} | tail -50; false; fi"
+        "HEALTH_OK=false; OOM_DETECTED=false; ERROR_DETECTED=false; HEALTH_TIMEOUT={{ health_check_timeout | default(300) }}; for i in $(seq 1 $HEALTH_TIMEOUT); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo \"[OK] vLLM server ready (took $i seconds)\"; HEALTH_OK=true; break; fi; if [ $((i % 10)) -eq 0 ]; then if grep -qE 'torch\\.OutOfMemoryError|CUDA out of memory|torch\\.cuda\\.OutOfMemoryError|Cannot allocate memory|KV cache is needed.*larger than.*available' {{"{{"}}LOG_FILE{{"}}"}} 2>/dev/null; then echo '[ERROR] OOM detected in vLLM logs'; OOM_DETECTED=true; break; fi; if grep -qE 'ValueError.*max seq len|RuntimeError.*CUDA|Traceback \\(most recent call last\\)' {{"{{"}}LOG_FILE{{"}}"}} 2>/dev/null; then echo '[ERROR] vLLM startup error detected'; ERROR_DETECTED=true; break; fi; fi; if [ $((i % 30)) -eq 0 ]; then LAST_LOG=$(tail -1 {{"{{"}}LOG_FILE{{"}}"}} 2>/dev/null || echo 'no log'); echo \"[INFO] Waiting... ($i/$HEALTH_TIMEOUT) - Last log: $LAST_LOG\"; fi; sleep 1; done; if [ \"$OOM_DETECTED\" = \"true\" ]; then echo '[FATAL] VRAM OOM - this pattern requires more GPU memory than available'; echo '--- Last 30 lines of log ---'; tail -30 {{"{{"}}LOG_FILE{{"}}"}};  echo '--- End of log ---'; false; elif [ \"$ERROR_DETECTED\" = \"true\" ]; then echo '[FATAL] vLLM startup error'; echo '--- Last 30 lines of log ---'; tail -30 {{"{{"}}LOG_FILE{{"}}"}};  echo '--- End of log ---'; false; elif [ \"$HEALTH_OK\" = \"false\" ]; then echo \"[ERROR] Health check timeout ($HEALTH_TIMEOUT seconds)\"; echo '--- Last 50 lines of log ---'; tail -50 {{"{{"}}LOG_FILE{{"}}"}};  echo '--- End of log ---'; false; fi"
       ]
     },
 {% if measurement_type == 'online' %}
@@ -88,9 +86,9 @@
       "id": "06-run-benchmark",
       "name": "Run Benchmark ({{ prompt_tokens }} tokens, c={{ concurrency }})",
       "description": "Run benchmark (warmup={{ warmup_iterations }}, measurement={{ measurement_iterations }}, c={{ concurrency }})",
+      "skip_if": "test -s {{"{{"}}OUTPUT_FILE{{"}}"}} && python3 -c \"import json; json.load(open('{{"{{"}}OUTPUT_FILE{{"}}"}}'))\" 2>/dev/null && echo '[SKIP] Benchmark already completed: {{"{{"}}OUTPUT_FILE{{"}}"}}'",
       "commands": [
         "sudo mkdir -p /tmp/results && sudo chown ubuntu:ubuntu /tmp/results",
-        "sudo rm -f {{"{{"}}OUTPUT_FILE{{"}}"}}",
         "sudo -u ubuntu env MLFLOW_EXPERIMENT_TIMESTAMP=\"${MLFLOW_EXPERIMENT_TIMESTAMP:-}\" python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type online --url http://localhost:{{"{{"}}PORT{{"}}"}} --model {{"{{"}}MODEL{{"}}"}} --mode unified --backend none --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --warmup-iterations {{"{{"}}WARMUP_ITERATIONS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --concurrency {{"{{"}}CONCURRENCY{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri arn:aws:sagemaker:us-east-1:776010787911:mlflow-tracking-server/nixl-efa-mlflow2 --mlflow-experiment-name nixl-efa-phase1 --phase {{"{{"}}PHASE{{"}}"}} --layer '{{ layer_name }}' --priority '{{ layer_priority }}' --tags 'phase={{ phase }}{% if infrastructure.tp_size is defined %},tp_size={{ infrastructure.tp_size }}{% endif %},instance={{ infrastructure.instance_type }}' --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]
@@ -100,9 +98,9 @@
       "id": "06-run-benchmark-offline",
       "name": "Run Benchmark (Offline, {{ prompt_tokens }} tokens)",
       "description": "Run offline benchmark (Python API direct)",
+      "skip_if": "test -s {{"{{"}}OUTPUT_FILE{{"}}"}} && python3 -c \"import json; json.load(open('{{"{{"}}OUTPUT_FILE{{"}}"}}'))\" 2>/dev/null && echo '[SKIP] Benchmark already completed: {{"{{"}}OUTPUT_FILE{{"}}"}}'",
       "commands": [
         "sudo mkdir -p /tmp/results && sudo chown ubuntu:ubuntu /tmp/results",
-        "sudo rm -f {{"{{"}}OUTPUT_FILE{{"}}"}}",
         "sudo -u ubuntu python3 {{"{{"}}BENCHMARK_SCRIPT{{"}}"}} --measurement-type offline --model {{"{{"}}MODEL{{"}}"}} --prompt-tokens {{"{{"}}PROMPT_TOKENS{{"}}"}} --max-tokens {{"{{"}}MAX_TOKENS{{"}}"}} --num-iterations {{"{{"}}NUM_ITERATIONS{{"}}"}} --prefix-cache {{ 'enabled' if prefix_cache else 'disabled' }} --output {{"{{"}}OUTPUT_FILE{{"}}"}} --mlflow-tracking-uri arn:aws:sagemaker:us-east-1:776010787911:mlflow-tracking-server/nixl-efa-mlflow2 --mlflow-experiment-name nixl-efa-phase1 --phase {{"{{"}}PHASE{{"}}"}} --mlflow-run-name {{ pattern_id }}-$(date +%Y%m%d-%H%M%S)",
         "echo '[OK] Benchmark complete: {{"{{"}}OUTPUT_FILE{{"}}"}}'"
       ]

@@ -68,10 +68,10 @@
     },
     {
       "id": "04-health-check",
-      "name": "Consumer Health Check",
-      "description": "Verify Consumer server is ready",
+      "name": "Consumer Health Check (OOM Detection)",
+      "description": "Verify Consumer server is ready with OOM/error early detection",
       "commands": [
-        "for i in $(seq 1 120); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo '[OK] Consumer server ready'; exit 0; fi; [ $((i % 20)) -eq 0 ] && echo '[INFO] Waiting... ('$i'/120)'; sleep 1; done; echo '[ERROR] Consumer health check timeout'; cat {{"{{"}}LOG_FILE{{"}}"}} | tail -50; exit 1"
+        "HEALTH_OK=false; OOM_DETECTED=false; ERROR_DETECTED=false; HEALTH_TIMEOUT={{ health_check_timeout | default(300) }}; for i in $(seq 1 $HEALTH_TIMEOUT); do HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:{{"{{"}}PORT{{"}}"}}/health 2>/dev/null || echo '000'); if [ \"$HTTP_CODE\" = \"200\" ]; then echo \"[OK] Consumer server ready (took $i seconds)\"; HEALTH_OK=true; break; fi; if [ $((i % 10)) -eq 0 ]; then if grep -qE 'torch\\.OutOfMemoryError|CUDA out of memory|torch\\.cuda\\.OutOfMemoryError|Cannot allocate memory|KV cache is needed.*larger than.*available' {{"{{"}}LOG_FILE{{"}}"}} 2>/dev/null; then echo '[ERROR] OOM detected in Consumer logs'; OOM_DETECTED=true; break; fi; if grep -qE 'ValueError.*max seq len|RuntimeError.*CUDA|Traceback \\(most recent call last\\)' {{"{{"}}LOG_FILE{{"}}"}} 2>/dev/null; then echo '[ERROR] Consumer startup error detected'; ERROR_DETECTED=true; break; fi; fi; if [ $((i % 30)) -eq 0 ]; then LAST_LOG=$(tail -1 {{"{{"}}LOG_FILE{{"}}"}} 2>/dev/null || echo 'no log'); echo \"[INFO] Waiting... ($i/$HEALTH_TIMEOUT) - Last log: $LAST_LOG\"; fi; sleep 1; done; if [ \"$OOM_DETECTED\" = \"true\" ]; then echo '[FATAL] VRAM OOM - this pattern requires more GPU memory than available'; echo '--- Last 30 lines of log ---'; tail -30 {{"{{"}}LOG_FILE{{"}}"}};  echo '--- End of log ---'; exit 1; elif [ \"$ERROR_DETECTED\" = \"true\" ]; then echo '[FATAL] Consumer startup error'; echo '--- Last 30 lines of log ---'; tail -30 {{"{{"}}LOG_FILE{{"}}"}};  echo '--- End of log ---'; exit 1; elif [ \"$HEALTH_OK\" = \"false\" ]; then echo \"[ERROR] Consumer health check timeout ($HEALTH_TIMEOUT seconds)\"; echo '--- Last 50 lines of log ---'; tail -50 {{"{{"}}LOG_FILE{{"}}"}};  echo '--- End of log ---'; exit 1; fi"
       ]
     },
     {

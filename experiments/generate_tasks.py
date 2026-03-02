@@ -75,6 +75,14 @@ def merge_settings(common: dict, pattern: dict) -> dict:
     return merged
 
 
+# Known max_model_len limits based on actual VRAM measurements
+# key: (model, gpu_type, tp_size, gpu_memory_utilization)
+# value: max supported max_model_len
+MAX_MODEL_LEN_LIMITS = {
+    ("Qwen/Qwen2.5-32B-Instruct", "NVIDIA L40S 48GB", 4, 0.9): 48848,
+}
+
+
 def compute_derived_values(merged: dict, infrastructure: dict) -> dict:
     """Compute derived template variables from merged settings."""
     # Model size heuristic for initialization wait time
@@ -110,6 +118,29 @@ def compute_derived_values(merged: dict, infrastructure: dict) -> dict:
             merged["max_model_len"] = 20480
         else:
             merged["max_model_len"] = 16384
+
+    # VRAM-based max_model_len adjustment (Phase 1: Auto-adjust with safety)
+    max_model_len = merged.get("max_model_len", 16384)
+    model_name = infrastructure.get("model", "")
+    gpu_type = infrastructure.get("gpu_type", "")
+    tp_size = infrastructure.get("tp_size", 1)
+    gpu_mem_util = merged.get("gpu_memory_utilization", 0.9)
+
+    limit_key = (model_name, gpu_type, tp_size, gpu_mem_util)
+    known_limit = MAX_MODEL_LEN_LIMITS.get(limit_key)
+
+    if known_limit is not None and max_model_len > known_limit:
+        # Auto-adjust to safe value
+        # Round down to power-of-2 boundaries for vLLM optimization
+        power_of_2_options = [4096, 8192, 16384, 20480, 32768, 40960, 49152, 65536, 131072]
+        adjusted = max(v for v in power_of_2_options if v <= known_limit)
+        print(
+            f"  [AUTO-ADJUST] max_model_len {max_model_len} -> {adjusted} "
+            f"(GPU VRAM limit: {known_limit} tokens for {model_name} on {gpu_type}, TP={tp_size})"
+        )
+        merged["max_model_len"] = adjusted
+        merged["max_model_len_adjusted"] = True
+        merged["max_model_len_original"] = max_model_len
 
     return merged
 
@@ -227,9 +258,11 @@ def generate_task_json(
     merged = {**common}
 
     # Apply layer vllm_config (overrides common)
+    # Exclude 'max_model_len' from layer config to allow dynamic computation based on prompt_tokens
     layer_vllm_config = layer.get("vllm_config", {})
     for key, value in layer_vllm_config.items():
-        merged[key] = value
+        if key != "max_model_len":
+            merged[key] = value
 
     # Apply pattern overrides (highest priority)
     for key, value in pattern.items():
