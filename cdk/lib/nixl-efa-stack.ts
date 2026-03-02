@@ -182,6 +182,20 @@ export class NixlEfaStack extends Stack {
       "Allow vLLM HTTP from VPC"
     );
 
+    // Disaggregated inference: Proxy server (VPC only)
+    this.securityGroup.addIngressRule(
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+      ec2.Port.tcp(8000),
+      "Allow Proxy server from VPC"
+    );
+
+    // Disaggregated inference: Consumer API server (VPC only)
+    this.securityGroup.addIngressRule(
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+      ec2.Port.tcp(8200),
+      "Allow Consumer API server from VPC"
+    );
+
     // All traffic within security group (for EFA)
     // EFA requires all protocols, not just TCP
     this.securityGroup.addIngressRule(
