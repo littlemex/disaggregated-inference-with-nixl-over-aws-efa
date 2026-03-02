@@ -29,7 +29,7 @@
     "gpu_memory_utilization": 0.9,
     "max_num_batched_tokens": 4096,
     "measurement_type": "online",
-    "temperature": 0.0,
+    "temperature": 0,
     "streaming": true,
     "enable_chunked_prefill": true,
     "enable_prefix_caching": true,
@@ -62,7 +62,7 @@
       "requires_yarn": true,
       "rope_scaling": {
         "type": "yarn",
-        "factor": 4.0,
+        "factor": 4,
         "original_max_position_embeddings": 32768
       }
     }
@@ -2369,7 +2369,9 @@
         "enforce_eager": true,
         "proxy_required": false,
         "port": 8000,
-        "nodes": ["node1"]
+        "nodes": [
+          "node1"
+        ]
       },
       "patterns": [
         "p2-unified-1k-c1",
@@ -2408,7 +2410,10 @@
         "prefill_port": 8100,
         "decode_port": 8200,
         "proxy_port": 8000,
-        "nodes": ["node1(prefill)", "node2(decode)"]
+        "nodes": [
+          "node1(prefill)",
+          "node2(decode)"
+        ]
       },
       "patterns": [
         "p2-efa-1k-c1",
@@ -2446,7 +2451,10 @@
         "prefill_port": 8100,
         "decode_port": 8200,
         "proxy_port": 8000,
-        "nodes": ["node1(prefill)", "node2(decode)"]
+        "nodes": [
+          "node1(prefill)",
+          "node2(decode)"
+        ]
       },
       "patterns": [
         "p2-efa-12k-c1-crosslayers"
@@ -2475,7 +2483,10 @@
         "prefill_port": 8100,
         "decode_port": 8200,
         "proxy_port": 8000,
-        "nodes": ["node1(prefill)", "node2(decode)"]
+        "nodes": [
+          "node1(prefill)",
+          "node2(decode)"
+        ]
       },
       "patterns": [
         "p2-tcp-1k-c1",
@@ -2513,13 +2524,16 @@
         "requires_yarn": true,
         "rope_scaling": {
           "type": "yarn",
-          "factor": 4.0,
+          "factor": 4,
           "original_max_position_embeddings": 32768
         },
         "prefill_port": 8100,
         "decode_port": 8200,
         "proxy_port": 8000,
-        "nodes": ["node1(prefill)", "node2(decode)"]
+        "nodes": [
+          "node1(prefill)",
+          "node2(decode)"
+        ]
       },
       "patterns": [
         "p2-efa-64k-c1",
@@ -2550,13 +2564,16 @@
         "requires_yarn": true,
         "rope_scaling": {
           "type": "yarn",
-          "factor": 4.0,
+          "factor": 4,
           "original_max_position_embeddings": 32768
         },
         "prefill_port": 8100,
         "decode_port": 8200,
         "proxy_port": 8000,
-        "nodes": ["node1(prefill)", "node2(decode)"]
+        "nodes": [
+          "node1(prefill)",
+          "node2(decode)"
+        ]
       },
       "patterns": [
         "p2-tcp-64k-c1",
@@ -2571,7 +2588,11 @@
       "step": 8,
       "layer": "L4-Analysis",
       "vllm_required": false,
-      "depends_on": ["L1-Unified", "L2-EFA", "L3-TCP"],
+      "depends_on": [
+        "L1-Unified",
+        "L2-EFA",
+        "L3-TCP"
+      ],
       "patterns": [
         "p2-analysis-bimodality-detection",
         "p2-analysis-proxy-overhead",
