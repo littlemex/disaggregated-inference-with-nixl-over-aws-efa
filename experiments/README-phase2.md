@@ -750,7 +750,7 @@ cd /home/coder/tmp/disaggregated-inference-with-nixl-over-aws-efa/setup
 
 両ノードで以下を検証完了:
 - ✅ MLflow 3.10.0
-- ✅ GPU: NVIDIA A10G, Driver 580.126.09, 23GB VRAM
+- ✅ GPU: NVIDIA L40S, Driver 580.126.09, 46GB VRAM
 - ✅ EFA device: /dev/infiniband/uverbs0
 - ✅ libfabric EFA provider
 - ✅ NCCL all_reduce_perf
