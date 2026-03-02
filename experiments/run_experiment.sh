@@ -247,6 +247,7 @@ run_task_on_node() {
 
     # Prepare commands array
     local commands=(
+        ". /etc/environment 2>/dev/null || true"
         "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/task_runner.sh /tmp/"
         "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/benchmark_common.py /tmp/"
         "aws s3 cp s3://$SCRIPTS_BUCKET/scripts/disagg_proxy_server.py /tmp/ 2>/dev/null || true"
