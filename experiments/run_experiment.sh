@@ -180,7 +180,43 @@ do_deploy() {
     local scripts_dir="$SCRIPT_DIR/scripts"
     local task_dir="$SCRIPT_DIR/task-definitions/$phase"
 
-    log "Deploying scripts and tasks for $phase..."
+    # Get experiment timestamp for path isolation
+    local exp_timestamp
+    exp_timestamp=$(get_experiment_timestamp "$phase")
+    if [ -z "$exp_timestamp" ]; then
+        error "Failed to get experiment timestamp. Check if mlflow_config.timestamp_suffix is enabled in $phase.json"
+    fi
+
+    log "Deploying scripts and tasks for $phase (experiment: $exp_timestamp)..."
+
+    # Step 1: Delete S3 files for THIS experiment only
+    log "Cleaning up S3 files for experiment $exp_timestamp..."
+    aws s3 rm "s3://$SCRIPTS_BUCKET/tasks/$phase/$exp_timestamp/" --recursive --quiet 2>/dev/null || {
+        info "No existing S3 files to delete (this is OK for first deployment)"
+    }
+    success "S3 cleanup complete"
+
+    # Step 2: Delete files on remote nodes
+    log "Cleaning up files on remote nodes..."
+    local cleanup_commands=(
+        "rm -f /tmp/*.json"
+        "rm -f /tmp/vllm_*.log /tmp/vllm_*.pid"
+        "rm -f /tmp/proxy_*.log /tmp/proxy_*.pid"
+        "rm -f /tmp/benchmark_common.py /tmp/disagg_proxy_server.py /tmp/task_runner.sh"
+        "rm -rf /tmp/scripts"
+        "echo '[OK] Cleanup complete'"
+    )
+
+    for node_id in "$NODE1_ID" "$NODE2_ID"; do
+        log "Cleaning up on $node_id..."
+        if ssm_run_command "$node_id" "${cleanup_commands[@]}" >/dev/null 2>&1; then
+            success "Cleanup complete on $node_id"
+        else
+            info "No files to cleanup on $node_id (this is OK)"
+        fi
+    done
+    success "Remote node cleanup complete"
+    echo ""
 
     # Upload shared scripts to S3
     if [ -d "$scripts_dir" ]; then
@@ -189,9 +225,9 @@ do_deploy() {
         error "Scripts directory not found: $scripts_dir"
     fi
 
-    # Upload task definitions to S3
+    # Upload task definitions to S3 with experiment timestamp
     if [ -d "$task_dir" ]; then
-        sync_to_s3 "$task_dir" "tasks/$phase/"
+        sync_to_s3 "$task_dir" "tasks/$phase/$exp_timestamp/"
     else
         error "Task definitions not found: $task_dir"
         echo "[INFO] Generate them first: ./generate_tasks.py $phase"
@@ -207,13 +243,13 @@ do_deploy() {
     if [ -f "$verify_script" ]; then
         echo ""
         log "Running post-deploy verification..."
-        if bash "$verify_script" "$phase"; then
+        if EXPERIMENT_TIMESTAMP="$exp_timestamp" bash "$verify_script" "$phase"; then
             success "Post-deploy verification passed"
         else
             echo ""
             echo -e "${RED}[ERROR]${NC} Post-deploy verification FAILED"
             echo "[INFO] Files were uploaded but verification detected mismatches."
-            echo "[INFO] Re-run with: ./scripts/verify-s3-deployment.sh $phase --verbose"
+            echo "[INFO] Re-run with: EXPERIMENT_TIMESTAMP=$exp_timestamp ./scripts/verify-s3-deployment.sh $phase --verbose"
             exit 1
         fi
     fi
@@ -233,15 +269,20 @@ run_task_on_node() {
     local json_name
     json_name=$(basename "$json_path")
 
-    # Determine the S3 key for this task definition
-    # json_path is like: .../task-definitions/phase14/p14-unified-1k.json
-    # or .../task-definitions/phase14/consumer/p14-efa-4k-consumer.json
-    local relative_path="${json_path#*task-definitions/}"
-    local s3_task_key="tasks/$relative_path"
-
     # Get experiment timestamp for this phase
     local exp_timestamp
     exp_timestamp=$(get_experiment_timestamp "$phase")
+    if [ -z "$exp_timestamp" ]; then
+        error "Failed to get experiment timestamp for $phase"
+    fi
+
+    # Determine the S3 key for this task definition with experiment timestamp
+    # json_path is like: .../task-definitions/phase14/p14-unified-1k.json
+    # or .../task-definitions/phase14/consumer/p14-efa-4k-consumer.json
+    local relative_path="${json_path#*task-definitions/}"
+    # Remove phase prefix: phase14/p14-unified-1k.json -> p14-unified-1k.json
+    local file_path="${relative_path#$phase/}"
+    local s3_task_key="tasks/$phase/$exp_timestamp/$file_path"
 
     log "Running $json_name on instance: $instance_id"
 

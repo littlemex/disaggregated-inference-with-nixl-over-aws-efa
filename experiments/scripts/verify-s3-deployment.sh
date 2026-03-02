@@ -397,13 +397,22 @@ log "Step 2/4: Verifying task definitions..."
 
 TASK_DIR="$EXPERIMENTS_DIR/task-definitions/$PHASE"
 if [ -d "$TASK_DIR" ]; then
+    # Get experiment timestamp for S3 path
+    EXPERIMENT_TIMESTAMP="${EXPERIMENT_TIMESTAMP:-}"
+    if [ -z "$EXPERIMENT_TIMESTAMP" ]; then
+        warn "EXPERIMENT_TIMESTAMP not set, using direct path (legacy mode)"
+        s3_path_prefix="tasks/$PHASE/"
+    else
+        s3_path_prefix="tasks/$PHASE/$EXPERIMENT_TIMESTAMP/"
+    fi
+
     # Verify a sample of task definitions (up to 5 files from each subdirectory)
     for subdir in "" "producer" "consumer" "baseline" "low-level"; do
         local_subdir="$TASK_DIR"
-        s3_prefix="tasks/$PHASE/"
+        s3_prefix="$s3_path_prefix"
         if [ -n "$subdir" ]; then
             local_subdir="$TASK_DIR/$subdir"
-            s3_prefix="tasks/$PHASE/$subdir/"
+            s3_prefix="${s3_path_prefix}${subdir}/"
         fi
 
         if [ ! -d "$local_subdir" ]; then

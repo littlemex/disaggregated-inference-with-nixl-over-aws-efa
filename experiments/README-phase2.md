@@ -505,6 +505,66 @@ export SCRIPTS_BUCKET="your-bucket-name"
 
 この 3 ステップを忘れると、ローカルでは正しくてもリモートノードでは古い設定が使われます。
 
+#### EFA (LIBFABRIC) で KV-Cache 転送がタイムアウトする
+
+**症状**:
+```
+TimeoutError: RPC call to execute_model timed out.
+```
+
+Consumer のログに以下のようなエラーが記録される：
+```
+EngineCore encountered an issue. See stack trace (above) for the root cause.
+```
+
+**原因**: `kv_ip` パラメータが正しく設定されていない。vLLM v0.16.0 では `kv_ip` が明示的に指定されていない場合、デフォルトの `127.0.0.1` が使用されます。
+
+**UCX backend (TCP) と LIBFABRIC backend (EFA) の違い**:
+
+| Backend | kv_ip='127.0.0.1' の動作 | 理由 |
+|---------|------------------------|------|
+| **UCX (TCP)** | 動作する（測定成功） | 環境変数 `VLLM_NIXL_SIDE_CHANNEL_HOST` が実際の接続に使用される |
+| **LIBFABRIC (EFA)** | 動作しない（タイムアウト） | `kv_ip` を厳密にチェックし、正しいノード間 IP が必須 |
+
+**対処法**:
+
+テンプレートで `kv_ip` を明示的に設定する必要があります（2026-03-02 に修正済み）：
+
+**Producer (disaggregated-producer.json.jinja2)**:
+```json
+--kv-transfer-config '{
+  "kv_connector": "NixlConnector",
+  "kv_role": "kv_producer",
+  "kv_rank":0,
+  "kv_parallel_size":2,
+  "kv_ip": "'$NODE1_PRIVATE'",
+  "kv_buffer_device": "cpu",
+  ...
+}'
+```
+
+**Consumer (disaggregated-consumer.json.jinja2)**:
+```json
+--kv-transfer-config '{
+  "kv_connector": "NixlConnector",
+  "kv_role": "kv_consumer",
+  "kv_rank":1,
+  "kv_parallel_size":2,
+  "kv_ip": "'$NODE2_PRIVATE'",
+  "kv_buffer_device": "cpu",
+  ...
+}'
+```
+
+**注意**: 各ノードは**自身の Private IP** を `kv_ip` に指定する必要があります。これにより、ZMQ side channel が正しい IP アドレスで bind されます。
+
+修正後は必ずワークフローを実行:
+```bash
+./generate_tasks.py phase2
+./run_experiment.sh phase2 deploy
+./scripts/verify-s3-deployment.sh phase2
+```
+
 #### SSM コマンドが失敗する
 
 ```bash
