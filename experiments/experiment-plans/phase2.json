@@ -581,7 +581,7 @@
         "proxy_required": true,
         "kv_connector": "NixlConnector",
         "kv_buffer_device": "cpu",
-        "kv_buffer_size": 5000000000,
+        "kv_buffer_size": 2000000000,
         "kv_parallel_size": 2,
         "nixl_backend": "UCX",
         "ucx_tls": "tcp,self,sm",

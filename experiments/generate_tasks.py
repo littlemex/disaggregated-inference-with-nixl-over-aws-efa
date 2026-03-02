@@ -100,11 +100,12 @@ def compute_derived_values(merged: dict, infrastructure: dict) -> dict:
     tp_size = infrastructure.get("tp_size", 1)
     merged["tp_per_node"] = tp_size
 
-    # KV buffer size: scale based on model size
-    if "32B" in model_name or "70B" in model_name:
-        merged["kv_buffer_size"] = 5000000000  # 5GB
-    else:
-        merged["kv_buffer_size"] = 1000000000  # 1GB
+    # KV buffer size: use explicit value if set, otherwise scale based on model size
+    if "kv_buffer_size" not in merged:
+        if "32B" in model_name or "70B" in model_name:
+            merged["kv_buffer_size"] = 5000000000  # 5GB
+        else:
+            merged["kv_buffer_size"] = 1000000000  # 1GB
 
     # max_model_len: use pattern override or compute from prompt_tokens
     if "max_model_len" not in merged:
