@@ -80,6 +80,7 @@ def merge_settings(common: dict, pattern: dict) -> dict:
 # value: max supported max_model_len
 MAX_MODEL_LEN_LIMITS = {
     ("Qwen/Qwen2.5-32B-Instruct", "NVIDIA L40S 48GB", 4, 0.9): 48848,
+    ("Qwen/Qwen2.5-32B-Instruct", "NVIDIA A10G", 4, 0.9): 20480,  # A10G 23GB: ~7GB available for KV cache after model weights
 }
 
 
@@ -94,10 +95,10 @@ def compute_derived_values(merged: dict, infrastructure: dict) -> dict:
     else:
         merged["init_wait_seconds"] = 120
 
-    # TP per node: total TP / node count
+    # TP per node: in disaggregated inference, each node runs a full model instance
+    # so tp_per_node should equal tp_size (not divided by node_count)
     tp_size = infrastructure.get("tp_size", 1)
-    node_count = infrastructure.get("node_count", 2)
-    merged["tp_per_node"] = max(tp_size // node_count, 1)
+    merged["tp_per_node"] = tp_size
 
     # KV buffer size: scale based on model size
     if "32B" in model_name or "70B" in model_name:

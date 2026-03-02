@@ -68,9 +68,7 @@
 {% endif %}
 {% if backend == 'efa' %}
         "export NIXL_BACKEND=LIBFABRIC",
-        "export FI_PROVIDER=efa",
         "export FI_EFA_FORK_SAFE=1",
-        "export FI_EFA_USE_DEVICE_RDMA=1",
         "export FI_LOG_LEVEL=warn",
 {% elif backend == 'tcp' %}
         "export NIXL_BACKEND=TCP",
