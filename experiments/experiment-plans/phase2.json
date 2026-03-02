@@ -9,13 +9,13 @@
     "_comment": "Set timestamp_suffix to false to disable timestamp in experiment name. When true, experiment name becomes: nixl-efa-phase2-YYYYMMDD-HHMMSS"
   },
   "infrastructure": {
-    "instance_type": "g5.12xlarge",
+    "instance_type": "g6e.12xlarge",
     "node_count": 2,
     "model": "Qwen/Qwen2.5-32B-Instruct",
     "model_size": "32B",
     "vllm_version": "v0.16.0",
     "nixl_version": "v0.10.0",
-    "gpu_type": "NVIDIA A10G",
+    "gpu_type": "NVIDIA L40S 48GB",
     "gpu_count_per_node": 4,
     "tp_size": 4,
     "efa_bandwidth_gbps": 100,
