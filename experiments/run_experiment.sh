@@ -286,7 +286,7 @@ run_single_pattern() {
         else
             error "Producer task definition not found: $producer_dir/$pattern_id.json or $task_dir/$pattern_id.json"
         fi
-        consumer_json="$consumer_dir/$pattern_id-consumer.json"
+        consumer_json="$consumer_dir/$pattern_id.json"
         client_json="$client_dir/$pattern_id-client.json"
     fi
 
