@@ -46,6 +46,22 @@ source "$LIB_DIR/ssm-run.sh"
 : "${NODE1_PRIVATE:?NODE1_PRIVATE not set}"
 : "${NODE2_PRIVATE:?NODE2_PRIVATE not set}"
 
+# Auto-detect MLFLOW_TRACKING_ARN if not set
+if [ -z "${MLFLOW_TRACKING_ARN:-}" ]; then
+    # Try to get from phase2-mlflow-prod-east-1 stack
+    MLFLOW_TRACKING_ARN=$(aws cloudformation describe-stacks \
+        --stack-name phase2-mlflow-prod-east-1 \
+        --region us-east-1 \
+        --query 'Stacks[0].Outputs[?OutputKey==`TrackingServerArn`].OutputValue' \
+        --output text 2>/dev/null || echo "")
+
+    if [ -n "$MLFLOW_TRACKING_ARN" ]; then
+        echo "[INFO] Auto-detected MLFLOW_TRACKING_ARN: $MLFLOW_TRACKING_ARN"
+    else
+        echo "[WARNING] MLFLOW_TRACKING_ARN not set and could not auto-detect from CloudFormation"
+    fi
+fi
+
 TASK_RUNNER_SEARCH_PATHS=(
     "/work/data-science/claudecode/investigations/nixl-efa-tai/setup/task_runner.sh"
     "${SCRIPT_DIR}/../setup/task_runner.sh"
@@ -217,6 +233,9 @@ run_task_on_node() {
     if [ -n "$exp_timestamp" ]; then
         env_exports="$env_exports MLFLOW_EXPERIMENT_TIMESTAMP='$exp_timestamp'"
         info "Using experiment timestamp: $exp_timestamp"
+    fi
+    if [ -n "${MLFLOW_TRACKING_ARN:-}" ]; then
+        env_exports="$env_exports MLFLOW_TRACKING_ARN='$MLFLOW_TRACKING_ARN'"
     fi
 
     # Extract PEER_IP from extra_env if present (format: "PEER_IP='172.31.47.40'")
