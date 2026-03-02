@@ -236,13 +236,13 @@ check_network() {
         print_fail "No internet connectivity"
     fi
 
-    # Check peer connectivity if NODE2_PRIVATE_IP is set
-    if [ -n "${NODE2_PRIVATE_IP:-}" ]; then
-        print_check "Connectivity to peer node ($NODE2_PRIVATE_IP)"
-        if ping -c 3 -W 5 "$NODE2_PRIVATE_IP" > /dev/null 2>&1; then
+    # Check peer connectivity if NODE2_PRIVATE is set
+    if [ -n "${NODE2_PRIVATE:-}" ]; then
+        print_check "Connectivity to peer node ($NODE2_PRIVATE)"
+        if ping -c 3 -W 5 "$NODE2_PRIVATE" > /dev/null 2>&1; then
             print_pass
         else
-            print_fail "Cannot reach peer node at $NODE2_PRIVATE_IP"
+            print_fail "Cannot reach peer node at $NODE2_PRIVATE"
         fi
     fi
 }

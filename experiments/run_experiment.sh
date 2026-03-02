@@ -201,6 +201,23 @@ do_deploy() {
     upload_to_s3 "$TASK_RUNNER" "scripts/task_runner.sh"
 
     success "All files deployed to S3"
+
+    # Post-deploy verification
+    local verify_script="$SCRIPT_DIR/scripts/verify-s3-deployment.sh"
+    if [ -f "$verify_script" ]; then
+        echo ""
+        log "Running post-deploy verification..."
+        if bash "$verify_script" "$phase"; then
+            success "Post-deploy verification passed"
+        else
+            echo ""
+            echo -e "${RED}[ERROR]${NC} Post-deploy verification FAILED"
+            echo "[INFO] Files were uploaded but verification detected mismatches."
+            echo "[INFO] Re-run with: ./scripts/verify-s3-deployment.sh $phase --verbose"
+            exit 1
+        fi
+    fi
+
     echo ""
     echo "Next steps:"
     echo "  1. Run experiment: ./run_experiment.sh $phase run L0"

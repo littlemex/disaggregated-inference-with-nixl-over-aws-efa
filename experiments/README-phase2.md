@@ -184,6 +184,55 @@ echo "NODE2_ID: $NODE2_ID ($NODE2_PRIVATE)"
 ./run_experiment.sh phase2 deploy
 ```
 
+### ステップ 4.5: デプロイの検証（推奨）
+
+テンプレート修正後やデプロイ後は、S3 へのデプロイが正しく完了したことを検証することを強く推奨します。
+
+```bash
+# S3 デプロイの自動検証（169 項目のチェック）
+export SCRIPTS_BUCKET="phase2-l2-nixl-efa-dev-east--scriptsbucket40feb4b1-0irnolwcgsoo"
+./scripts/verify-s3-deployment.sh phase2
+```
+
+検証内容:
+- **Step 1**: 共有スクリプトの md5 チェックサム検証
+- **Step 2**: タスク定義ファイルのサンプル検証
+- **Step 3**: **CRITICAL** - VLLM_NIXL_SIDE_CHANNEL_HOST の設定検証
+  - Producer: `$NODE1_PRIVATE` (自ノード IP)
+  - Consumer: `$NODE2_PRIVATE` (自ノード IP)
+- **Step 4**: テンプレート整合性検証
+
+**重要**: テンプレート修正後は必ず以下のワークフローを実行してください：
+
+```bash
+# 1. タスク定義の再生成
+./generate_tasks.py phase2
+
+# 2. S3 への再デプロイ
+./run_experiment.sh phase2 deploy
+
+# 3. デプロイの検証
+export SCRIPTS_BUCKET="phase2-l2-nixl-efa-dev-east--scriptsbucket40feb4b1-0irnolwcgsoo"
+./scripts/verify-s3-deployment.sh phase2
+```
+
+このワークフローを守らないと、古いテンプレートが S3 に残り、測定実行時に ZMQ エラーなどの問題が発生する可能性があります。
+
+#### 追加の検証ツール
+
+テンプレートの整合性をローカルで検証するツールも利用可能です：
+
+```bash
+# テンプレート検証（Jinja2 構文、変数整合性、ループバック値検出）
+cd /work/data-science/claudecode/investigations/nixl-efa-tai/experiments
+python3 scripts/validate_templates.py
+
+# 生成済み JSON の検証（必須フィールド、ループバック値、タスク ID 一意性）
+bash scripts/validate_generated_json.sh
+```
+
+これらの検証ツールは、コミット前の Pre-commit hook や CI/CD パイプラインに統合することで、自動的な品質チェックを実現できます。詳細は `/work/data-science/claudecode/investigations/nixl-efa-tai/experiments/PREVENTION_STRATEGY.md` を参照してください。
+
 ### ステップ 5: 測定の実行
 
 ```bash
@@ -391,6 +440,35 @@ if experiment:
 
 ### よくあるエラーと対処法
 
+#### ZMQ エラー: Cannot assign requested address
+
+**症状**:
+```
+zmq.error.ZMQError: Cannot assign requested address (addr='tcp://172.31.91.12:5600')
+```
+
+**原因**: VLLM_NIXL_SIDE_CHANNEL_HOST が誤った IP アドレスに設定されている可能性があります。
+
+**対処法**:
+
+1. デプロイの検証を実行:
+```bash
+export SCRIPTS_BUCKET="phase2-l2-nixl-efa-dev-east--scriptsbucket40feb4b1-0irnolwcgsoo"
+./scripts/verify-s3-deployment.sh phase2
+```
+
+2. Step 3 の VLLM_NIXL_SIDE_CHANNEL_HOST 検証で FAIL が出た場合:
+   - テンプレートファイル（`templates/disaggregated-producer.json.jinja2`, `templates/disaggregated-consumer.json.jinja2`）を確認
+   - Producer: `export VLLM_NIXL_SIDE_CHANNEL_HOST=$NODE1_PRIVATE` であること
+   - Consumer: `export VLLM_NIXL_SIDE_CHANNEL_HOST=$NODE2_PRIVATE` であること
+
+3. テンプレート修正後は必ずワークフローを実行:
+```bash
+./generate_tasks.py phase2          # タスク再生成
+./run_experiment.sh phase2 deploy   # S3 再デプロイ
+./scripts/verify-s3-deployment.sh phase2  # 検証
+```
+
 #### タスク定義が生成されない
 
 ```bash
@@ -403,6 +481,29 @@ ls experiment-plans/phase2.json
 # jinja2 がインストールされているか確認
 python3 -c "import jinja2; print(jinja2.__version__)"
 ```
+
+#### テンプレート修正が反映されない
+
+**症状**: テンプレートを修正したのに、測定実行時に古い設定が使われている。
+
+**原因**: タスク定義の再生成または S3 への再デプロイを忘れている。
+
+**対処法**:
+
+テンプレート修正後は**必ず 3 ステップ**を実行:
+```bash
+# 1. タスク定義の再生成
+./generate_tasks.py phase2
+
+# 2. S3 への再デプロイ
+./run_experiment.sh phase2 deploy
+
+# 3. デプロイの検証
+export SCRIPTS_BUCKET="your-bucket-name"
+./scripts/verify-s3-deployment.sh phase2
+```
+
+この 3 ステップを忘れると、ローカルでは正しくてもリモートノードでは古い設定が使われます。
 
 #### SSM コマンドが失敗する
 
