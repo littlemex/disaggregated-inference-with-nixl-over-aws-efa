@@ -191,6 +191,17 @@ if m:
                     fail "Producer $filename: kv_buffer_size invalid: $buffer_size"
                 fi
             fi
+
+            # Verify kv_buffer_device is "cpu" (CRITICAL: cuda causes OOM on g6e)
+            if grep -q 'kv_buffer_device' "$json_file"; then
+                local buffer_device
+                buffer_device=$(grep -o '"kv_buffer_device":"[^"]*"' "$json_file" | head -1 || true)
+                if echo "$buffer_device" | grep -q '"cpu"'; then
+                    pass "Producer $filename: kv_buffer_device=cpu"
+                elif [ -n "$buffer_device" ]; then
+                    fail "Producer $filename: kv_buffer_device MUST be cpu, found: $buffer_device"
+                fi
+            fi
         done
     fi
 
@@ -223,8 +234,57 @@ if m:
             elif grep -q 'kv_role' "$json_file"; then
                 fail "Consumer $filename: kv_role should contain 'kv_consumer'"
             fi
+
+            # Verify kv_buffer_device is "cpu" (CRITICAL: cuda causes OOM on g6e)
+            if grep -q 'kv_buffer_device' "$json_file"; then
+                local buffer_device
+                buffer_device=$(grep -o '"kv_buffer_device":"[^"]*"' "$json_file" | head -1 || true)
+                if echo "$buffer_device" | grep -q '"cpu"'; then
+                    pass "Consumer $filename: kv_buffer_device=cpu"
+                elif [ -n "$buffer_device" ]; then
+                    fail "Consumer $filename: kv_buffer_device MUST be cpu, found: $buffer_device"
+                fi
+            fi
         done
     fi
+}
+
+# ---- S3 Content Verification ----
+
+# Verify that S3 files contain correct kv_buffer_device setting (not just checksums)
+verify_s3_content() {
+    local phase="$1"
+    local s3_prefix="$2"  # e.g., tasks/phase2/20260301-210020/
+
+    log "Verifying S3 file content (kv_buffer_device check)..."
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    trap "rm -rf $tmp_dir" RETURN
+
+    # Check a sample of producer and consumer files directly from S3
+    for subdir in "producer" "consumer"; do
+        local s3_path="s3://$SCRIPTS_BUCKET/${s3_prefix}${subdir}/"
+        local sample_files
+        sample_files=$(aws s3 ls "$s3_path" 2>/dev/null | grep "\.json" | awk '{print $NF}' | head -3 || true)
+
+        for fname in $sample_files; do
+            [ -z "$fname" ] && continue
+            local tmp_file="$tmp_dir/$fname"
+            if aws s3 cp "${s3_path}${fname}" "$tmp_file" --quiet 2>/dev/null; then
+                if grep -q 'kv_buffer_device' "$tmp_file"; then
+                    # Match both escaped (\":\"cpu\") and unescaped (":"cpu") formats
+                    if grep -qE 'kv_buffer_device["\\ ]*:["\\ ]*cpu' "$tmp_file"; then
+                        pass "S3 ${subdir}/$fname: kv_buffer_device=cpu"
+                    else
+                        local device_raw
+                        device_raw=$(grep -o 'kv_buffer_device[^,}]*' "$tmp_file" | head -1 || echo "UNKNOWN")
+                        fail "S3 ${subdir}/$fname: kv_buffer_device MUST be cpu, found: $device_raw"
+                    fi
+                fi
+            fi
+        done
+    done
 }
 
 # ---- S3 File Listing Comparison ----
@@ -440,9 +500,20 @@ verify_critical_configs "$PHASE"
 
 echo ""
 
-# ---- Step 4: Verify template consistency ----
+# ---- Step 4: Verify S3 file content (kv_buffer_device) ----
 
-log "Step 4/4: Verifying template consistency..."
+log "Step 4/5: Verifying S3 file content..."
+if [ -n "${EXPERIMENT_TIMESTAMP:-}" ]; then
+    verify_s3_content "$PHASE" "tasks/$PHASE/$EXPERIMENT_TIMESTAMP/"
+else
+    verify_s3_content "$PHASE" "tasks/$PHASE/"
+fi
+
+echo ""
+
+# ---- Step 5: Verify template consistency ----
+
+log "Step 5/5: Verifying template consistency..."
 verify_template_consistency "$PHASE"
 
 echo ""

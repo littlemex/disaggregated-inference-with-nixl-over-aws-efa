@@ -189,12 +189,10 @@ do_deploy() {
 
     log "Deploying scripts and tasks for $phase (experiment: $exp_timestamp)..."
 
-    # Step 1: Delete S3 files for THIS experiment only
-    log "Cleaning up S3 files for experiment $exp_timestamp..."
-    aws s3 rm "s3://$SCRIPTS_BUCKET/tasks/$phase/$exp_timestamp/" --recursive --quiet 2>/dev/null || {
-        info "No existing S3 files to delete (this is OK for first deployment)"
-    }
-    success "S3 cleanup complete"
+    # Step 1: Delete ALL S3 files under tasks/$phase/ (complete wipe)
+    log "Cleaning up ALL S3 files under tasks/$phase/..."
+    aws s3 rm "s3://$SCRIPTS_BUCKET/tasks/$phase/" --recursive --quiet 2>/dev/null || true
+    success "S3 cleanup complete (tasks/$phase/ wiped)"
 
     # Step 2: Delete files on remote nodes
     log "Cleaning up files on remote nodes..."
