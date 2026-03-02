@@ -202,12 +202,12 @@
       "id": "L1-Unified",
       "name": "Unified Mode (Single Node)",
       "priority": "P0",
-      "description": "TPOT baseline without KV-Cache transfer. Single node Prefill+Decode. No Proxy. Establishes pure GPU compute baseline for TPOT and Prefill-only TTFT baseline.",
-      "estimated_time_minutes": 120,
+      "description": "TPOT baseline without KV-Cache transfer. Single node Prefill+Decode. No Proxy. Establishes pure GPU compute baseline for TPOT and Prefill-only TTFT baseline. Limited to 1K-32K to match L2/L3 standard context.",
+      "estimated_time_minutes": 90,
       "vllm_config": {
         "mode": "unified",
         "proxy_required": false,
-        "max_model_len": 131072,
+        "max_model_len": 32768,
         "port": 8000
       },
       "patterns": [
@@ -317,45 +317,6 @@
             "TPOT",
             "TTFT",
             "Throughput"
-          ]
-        },
-        {
-          "id": "p2-unified-64k-c1",
-          "mode": "unified",
-          "prompt_tokens": 65536,
-          "prompt_label": "64K",
-          "concurrency": 1,
-          "requires_yarn": true,
-          "metrics": [
-            "TPOT",
-            "TTFT",
-            "E2E_latency"
-          ]
-        },
-        {
-          "id": "p2-unified-64k-c4",
-          "mode": "unified",
-          "prompt_tokens": 65536,
-          "prompt_label": "64K",
-          "concurrency": 4,
-          "requires_yarn": true,
-          "metrics": [
-            "TPOT",
-            "TTFT",
-            "Throughput"
-          ]
-        },
-        {
-          "id": "p2-unified-128k-c1",
-          "mode": "unified",
-          "prompt_tokens": 131072,
-          "prompt_label": "128K",
-          "concurrency": 1,
-          "requires_yarn": true,
-          "metrics": [
-            "TPOT",
-            "TTFT",
-            "E2E_latency"
           ]
         }
       ]
@@ -2364,7 +2325,7 @@
       "vllm_restart": true,
       "vllm_config": {
         "mode": "unified",
-        "max_model_len": 131072,
+        "max_model_len": 32768,
         "gpu_memory_utilization": 0.9,
         "enforce_eager": true,
         "proxy_required": false,
@@ -2382,14 +2343,11 @@
         "p2-unified-12k-c4",
         "p2-unified-12k-c16",
         "p2-unified-32k-c1",
-        "p2-unified-32k-c16",
-        "p2-unified-64k-c1",
-        "p2-unified-64k-c4",
-        "p2-unified-128k-c1"
+        "p2-unified-32k-c16"
       ],
-      "pattern_count": 12,
-      "description": "Unified mode: all prompts (1K-128K), single vLLM instance with max_model_len=131072",
-      "estimated_minutes": 120
+      "pattern_count": 9,
+      "description": "Unified mode: standard context (1K-32K), single vLLM instance with max_model_len=32768 to match L2/L3 standard",
+      "estimated_minutes": 90
     },
     {
       "step": 3,
