@@ -153,24 +153,6 @@
         "cat {{"{{"}}OUTPUT_FILE{{"}}"}} | head -30 || echo '[INFO] Results file not found'",
         "echo '--- End Results ---'"
       ]
-    },
-    {
-      "id": "99-cleanup-after-measurement",
-      "name": "Cleanup After Measurement",
-      "description": "Terminate vLLM Producer and Proxy and ensure GPU memory is released",
-      "commands": [
-        "echo '[INFO] Cleaning up GPU memory...'",
-        "sudo pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true",
-        "sudo pkill -9 -f 'ray::' 2>/dev/null || true",
-        "sudo pkill -9 -f 'disagg_proxy' 2>/dev/null || true",
-        "sudo pkill -9 -f 'python' 2>/dev/null || true",
-        "sleep 5",
-        "nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | while read pid; do [ -n \"$pid\" ] && sudo kill -9 $pid 2>/dev/null || true; done",
-        "echo '[INFO] Waiting for GPU memory to be released (max 60 seconds)...'",
-        "for i in $(seq 1 12); do MAX_MEM=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | sort -rn | head -1); if [ -z \"$MAX_MEM\" ] || [ \"$MAX_MEM\" -lt 1000 ]; then echo '[OK] GPU memory released'; break; fi; [ $((i % 3)) -eq 0 ] && echo '[INFO] Waiting... GPU memory: '$MAX_MEM' MiB ('$i'/12)'; sleep 5; done",
-        "nvidia-smi --query-gpu=index,memory.used --format=csv,noheader || true",
-        "echo '[OK] Cleanup complete'"
-      ]
     }
   ]
 }
