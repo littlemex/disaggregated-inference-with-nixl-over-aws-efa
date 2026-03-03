@@ -189,6 +189,8 @@
         "sudo bash -c 'echo \"FI_EFA_USE_DEVICE_RDMA=1\" >> /etc/environment'",
         "sudo bash -c 'echo \"FI_EFA_FORK_SAFE=1\" >> /etc/environment'",
         "sudo bash -c 'echo \"FI_LOG_LEVEL=warn\" >> /etc/environment'",
+        "echo '[INFO] Setting LD_PRELOAD for libibverbs version mismatch fix (NIXL rdmav34 vs system rdmav59)...'",
+        "sudo bash -c 'echo \"LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libibverbs.so.1\" >> /etc/environment'",
         "echo '[OK] EFA environment variables set in /etc/environment'"
       ]
     },

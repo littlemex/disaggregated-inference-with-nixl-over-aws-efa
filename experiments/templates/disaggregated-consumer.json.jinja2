@@ -46,7 +46,12 @@
         "export NCCL_DEBUG=WARN",
         "export NCCL_IB_DISABLE=0",
 {% endif %}
-{% if backend == 'efa' %}
+{% if backend == 'srd' %}
+        "export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libibverbs.so.1",
+        "export NIXL_BACKEND=UCX",
+        "export UCX_TLS=srd,self,sm",
+        "export UCX_NET_DEVICES=all",
+{% elif backend == 'efa' %}
         "export NIXL_BACKEND=LIBFABRIC",
         "export FI_PROVIDER=efa",
         "export FI_EFA_FORK_SAFE=1",

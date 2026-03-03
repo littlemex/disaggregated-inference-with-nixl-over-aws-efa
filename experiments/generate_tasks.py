@@ -115,7 +115,7 @@ def compute_derived_values(merged: dict, infrastructure: dict) -> dict:
         elif prompt_tokens >= 50000:
             merged["max_model_len"] = 65536
         elif prompt_tokens >= 20000:
-            merged["max_model_len"] = 32768
+            merged["max_model_len"] = 34816  # 32768 + 2048 margin for output tokens
         elif prompt_tokens >= 10000:
             merged["max_model_len"] = 20480
         else:

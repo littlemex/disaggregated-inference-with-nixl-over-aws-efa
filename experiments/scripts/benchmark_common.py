@@ -1011,7 +1011,7 @@ def main():
         "--backend",
         type=str,
         default="none",
-        choices=["none", "tcp", "efa"],
+        choices=["none", "tcp", "efa", "srd"],
         help="Network backend",
     )
 

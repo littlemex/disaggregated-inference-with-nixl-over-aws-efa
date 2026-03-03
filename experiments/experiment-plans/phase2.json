@@ -323,9 +323,9 @@
     },
     {
       "id": "L2-EFA",
-      "name": "EFA Disaggregated (1K-128K)",
+      "name": "EFA Disaggregated via UCX+SRD (1K-128K)",
       "priority": "P0",
-      "description": "EFA KV-Cache transfer measurements via Proxy (disagg_proxy_server.py v3). NixlConnector with LIBFABRIC backend, kv_buffer_device=cuda (g6e.12xlarge does not support GPUDirect RDMA but cuda buffer is available).",
+      "description": "EFA KV-Cache transfer measurements via Proxy (disagg_proxy_server.py v3). NixlConnector with UCX backend + UCX_TLS=srd,self,sm (EFA SRD transport). g6e.12xlarge は EFA hardware RDMA read/write 非対応のため LIBFABRIC backend は使用不可。UCX が SRD send/recv で RMA をエミュレートするため hardware RDMA 不要。kv_buffer_device=cpu (cuda は OOM)。max_model_len は generate_tasks.py が prompt_tokens から自動計算（L3-TCP と同一ロジックで公平性を担保）。",
       "estimated_time_minutes": 150,
       "vllm_config": {
         "mode": "disaggregated",
@@ -334,18 +334,25 @@
         "kv_buffer_device": "cpu",
         "kv_buffer_size": 5000000000,
         "kv_parallel_size": 2,
-        "nixl_backend": "LIBFABRIC",
-        "max_model_len_standard": 32768,
-        "max_model_len_longctx": 131072,
+        "nixl_backend": "UCX",
+        "ucx_tls": "srd,self,sm",
+        "ucx_net_devices": "all",
         "prefill_port": 8100,
         "decode_port": 8200,
         "proxy_port": 8000
+      },
+      "_investigation_notes": {
+        "root_cause": "g6e.12xlarge の EFA は hardware RDMA read/write を物理的にサポートしていない（/sys/class/infiniband/rdmap49s0/device/ に rdma_read/rdma_write が存在しない）",
+        "why_libfabric_fails": "NIXL LIBFABRIC backend は one-sided fi_read を使用。fi_info の FI_RMA は send/recv エミュレーション（two-sided）であり NIXL と非互換。fi_read が EAGAIN → err:113 で終了。",
+        "why_ucx_srd_works": "UCX は SRD の send/recv (messaging) で RMA を内部エミュレート。NIXL は ucp_get_nbx を呼ぶだけで下位実装は透過的。g6e の EFA は messaging をサポートしているため動作可能。",
+        "nixl_bundled_ucx": "NIXL はバンドル UCX (nixl_cu12.libs/ucx/) に libuct_ib_efa.so (SRD transport) を含む。システム UCX (v1.12.1) は EFA 非対応だが無関係。",
+        "hardware_rdma_instances": "p4d.24xlarge, p5.48xlarge, p5en.48xlarge, trn1.32xlarge, trn2.48xlarge, hpc6a, hpc7g"
       },
       "patterns": [
         {
           "id": "p2-efa-1k-c1",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 1024,
           "prompt_label": "1K",
           "concurrency": 1,
@@ -358,7 +365,7 @@
         {
           "id": "p2-efa-1k-c4",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 1024,
           "prompt_label": "1K",
           "concurrency": 4,
@@ -371,7 +378,7 @@
         {
           "id": "p2-efa-1k-c16",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 1024,
           "prompt_label": "1K",
           "concurrency": 16,
@@ -384,7 +391,7 @@
         {
           "id": "p2-efa-4k-c1",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 4096,
           "prompt_label": "4K",
           "concurrency": 1,
@@ -397,7 +404,7 @@
         {
           "id": "p2-efa-12k-c1",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 12288,
           "prompt_label": "12K",
           "concurrency": 1,
@@ -410,7 +417,7 @@
         {
           "id": "p2-efa-12k-c4",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 12288,
           "prompt_label": "12K",
           "concurrency": 4,
@@ -423,7 +430,7 @@
         {
           "id": "p2-efa-12k-c16",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 12288,
           "prompt_label": "12K",
           "concurrency": 16,
@@ -436,7 +443,7 @@
         {
           "id": "p2-efa-32k-c1",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 32768,
           "prompt_label": "32K",
           "concurrency": 1,
@@ -449,7 +456,7 @@
         {
           "id": "p2-efa-32k-c4",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 32768,
           "prompt_label": "32K",
           "concurrency": 4,
@@ -462,7 +469,7 @@
         {
           "id": "p2-efa-32k-c16",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 32768,
           "prompt_label": "32K",
           "concurrency": 16,
@@ -475,7 +482,7 @@
         {
           "id": "p2-efa-12k-c1-crosslayers",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 12288,
           "prompt_label": "12K",
           "concurrency": 1,
@@ -490,7 +497,7 @@
         {
           "id": "p2-efa-64k-c1",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 65536,
           "prompt_label": "64K",
           "concurrency": 1,
@@ -504,7 +511,7 @@
         {
           "id": "p2-efa-64k-c4",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 65536,
           "prompt_label": "64K",
           "concurrency": 4,
@@ -518,7 +525,7 @@
         {
           "id": "p2-efa-128k-c1",
           "mode": "disaggregated",
-          "transport": "efa",
+          "transport": "srd",
           "prompt_tokens": 131072,
           "prompt_label": "128K",
           "concurrency": 1,
@@ -2357,10 +2364,12 @@
       "restart_reason": "mode change (unified → disagg) + max_model_len change (131072 → 32768)",
       "vllm_config": {
         "mode": "disaggregated",
-        "transport": "efa",
+        "transport": "srd",
         "kv_connector": "NixlConnector",
         "kv_buffer_device": "cpu",
-        "nixl_backend": "LIBFABRIC",
+        "nixl_backend": "UCX",
+        "ucx_tls": "srd,self,sm",
+        "ucx_net_devices": "all",
         "max_model_len": 32768,
         "gpu_memory_utilization": 0.9,
         "enforce_eager": true,
@@ -2386,7 +2395,7 @@
         "p2-efa-32k-c16"
       ],
       "pattern_count": 10,
-      "description": "EFA standard context (1K-32K): LIBFABRIC backend, kv_buffer_device=cuda",
+      "description": "EFA standard context (1K-32K): UCX+SRD backend, kv_buffer_device=cpu",
       "estimated_minutes": 50
     },
     {
@@ -2397,10 +2406,12 @@
       "restart_reason": "enable_cross_layers_blocks change (false → true): KV-Cache memory layout optimization",
       "vllm_config": {
         "mode": "disaggregated",
-        "transport": "efa",
+        "transport": "srd",
         "kv_connector": "NixlConnector",
         "kv_buffer_device": "cpu",
-        "nixl_backend": "LIBFABRIC",
+        "nixl_backend": "UCX",
+        "ucx_tls": "srd,self,sm",
+        "ucx_net_devices": "all",
         "max_model_len": 32768,
         "gpu_memory_utilization": 0.9,
         "enforce_eager": true,
@@ -2426,7 +2437,7 @@
       "layer": "L3-TCP",
       "context": "standard",
       "vllm_restart": true,
-      "restart_reason": "transport change (EFA → TCP): kv_buffer_device cuda→cpu, backend LIBFABRIC→UCX",
+      "restart_reason": "transport change (EFA/SRD → TCP): ucx_tls srd,self,sm→tcp,self,sm",
       "vllm_config": {
         "mode": "disaggregated",
         "transport": "tcp",
@@ -2471,10 +2482,12 @@
       "restart_reason": "transport change (TCP → EFA) + max_model_len change (32768 → 131072) + YaRN activation",
       "vllm_config": {
         "mode": "disaggregated",
-        "transport": "efa",
+        "transport": "srd",
         "kv_connector": "NixlConnector",
         "kv_buffer_device": "cpu",
-        "nixl_backend": "LIBFABRIC",
+        "nixl_backend": "UCX",
+        "ucx_tls": "srd,self,sm",
+        "ucx_net_devices": "all",
         "max_model_len": 131072,
         "gpu_memory_utilization": 0.9,
         "enforce_eager": true,
@@ -2507,7 +2520,7 @@
       "layer": "L3-TCP",
       "context": "long_context",
       "vllm_restart": true,
-      "restart_reason": "transport change (EFA → TCP): kv_buffer_device cuda→cpu, backend LIBFABRIC→UCX",
+      "restart_reason": "transport change (EFA/SRD → TCP): ucx_tls srd,self,sm→tcp,self,sm",
       "vllm_config": {
         "mode": "disaggregated",
         "transport": "tcp",
