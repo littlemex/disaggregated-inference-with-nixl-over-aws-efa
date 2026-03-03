@@ -1,0 +1,23 @@
+{
+  "id": "p3-l0-network",
+  "description": "L0 Network baseline measurements for g7e.12xlarge",
+  "instance_type": "g7e.12xlarge",
+  "iperf3": {
+    "command": "iperf3 -c 172.31.2.221 -t 10 -P 4",
+    "bandwidth_gbps": 38.1,
+    "bandwidth_gbps_per_stream": 9.53,
+    "streams": 4,
+    "duration_seconds": 10,
+    "retransmits": 0,
+    "bandwidth_gbs": 4.76
+  },
+  "nccl_socket_pynccl_wrapper": {
+    "description": "Direct pynccl_wrapper test mimicking P2pNcclEngine pattern (daemon threads, ZMQ, separate CUDA streams, NCCL_CUMEM_ENABLE=1)",
+    "tests": [
+      {"size_mb": 0.001, "send_ms": 0.36, "recv_ms": 1.54},
+      {"size_mb": 1, "send_ms": 0.26, "recv_ms": 0.73},
+      {"size_mb": 64, "send_ms": 8.53, "recv_ms": 9.85, "bandwidth_gbs": 6.5}
+    ]
+  },
+  "timestamp": "2026-03-03T20:00:00Z"
+}

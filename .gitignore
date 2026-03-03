@@ -45,7 +45,9 @@ Thumbs.db
 experiments/task-definitions/phase*/
 
 # Experiments: measurement results (tracked in MLflow, not in git)
-experiments/results/phase*/
+experiments/results/phase2*/
+# Phase 3 results are tracked in git (no MLflow)
+!experiments/results/phase3/
 
 # Experiments: temporary files
 experiments/*.log

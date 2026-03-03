@@ -1,0 +1,35 @@
+{
+  "id": "p3-nccl-12k-c1",
+  "mode": "disaggregated",
+  "backend": "p2p_nccl_socket",
+  "connector": "P2pNcclConnector",
+  "transport": "NCCL Socket (NCCL_NET=Socket)",
+  "prompt_tokens": 12048,
+  "prompt_label": "12K",
+  "concurrency": 1,
+  "max_tokens": 64,
+  "completion_tokens": 31,
+  "measurement_iterations": 10,
+  "warmup_iterations": 1,
+  "model": "Qwen/Qwen2.5-32B-Instruct",
+  "instance_type": "g7e.12xlarge",
+  "tp_size": 2,
+  "max_model_len": 20480,
+  "results": {
+    "ttft_p50_ms": 2689.3,
+    "ttft_p99_ms": 2728.6,
+    "ttft_avg_ms": 2687.5,
+    "ttft_min_ms": 2651.2,
+    "ttft_max_ms": 2728.6,
+    "ttft_stdev_ms": 30.8,
+    "kv_transfer_overhead_ms": 920,
+    "kv_transfer_overhead_vs_tcp_reduction": "3.3x"
+  },
+  "raw_runs_ms": [2728.3, 2728.6, 2720.6, 2703.6, 2689.3, 2674.7, 2663.5, 2660.4, 2655.2, 2651.2],
+  "proxy_breakdown": {
+    "prefill_avg_ms": 1855,
+    "decode_avg_ms": 2710,
+    "kv_transfer_estimated_ms": 855
+  },
+  "timestamp": "2026-03-03T19:37:00Z"
+}

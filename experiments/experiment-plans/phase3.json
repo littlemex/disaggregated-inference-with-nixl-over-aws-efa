@@ -15,10 +15,10 @@
     "vllm_version": "v0.16.0",
     "nixl_version": "v0.10.0",
     "gpu_type": "NVIDIA RTX PRO 6000 Blackwell Server Edition 96GB",
-    "gpu_count_per_node": 4,
-    "tp_size": 4,
+    "gpu_count_per_node": 2,
+    "tp_size": 2,
     "efa_bandwidth_gbps": 100,
-    "region": "us-east-1",
+    "region": "us-west-2",
     "placement_group": "cluster",
     "venv_path": ""
   },
@@ -50,13 +50,13 @@
         "tokens": 12288,
         "total_bytes": 3221225472,
         "total_human": "3.0 GB",
-        "per_gpu_tp4": "768 MB"
+        "per_gpu_tp2": "1.5 GB"
       },
       "32K": {
         "tokens": 32768,
         "total_bytes": 8589934592,
         "total_human": "8.0 GB",
-        "per_gpu_tp4": "2.0 GB"
+        "per_gpu_tp2": "4.0 GB"
       }
     }
   },
@@ -176,10 +176,49 @@
           "metrics": ["TTFT", "TPOT", "Throughput"]
         }
       ]
+    },
+    {
+      "id": "L4-P2pNccl",
+      "name": "Disaggregated with P2pNcclConnector (NCCL Socket)",
+      "priority": "P1",
+      "description": "Disaggregated Inference using vLLM P2pNcclConnector with NCCL Socket transport (NCCL_NET=Socket). Uses send/recv semantics instead of one-sided RDMA, bypassing EFA3 hardware limitation. Requires input_processor.py patch for request_id suffix and custom asyncio proxy for parallel prefill/decode.",
+      "estimated_time_minutes": 30,
+      "vllm_config": {
+        "mode": "disaggregated",
+        "connector": "P2pNcclConnector",
+        "transport": "NCCL Socket",
+        "max_model_len_12k": 20480,
+        "max_model_len_32k": 34816,
+        "producer_port": 8100,
+        "consumer_port": 8200,
+        "proxy_port": 8000
+      },
+      "patterns": [
+        {
+          "id": "p3-nccl-12k-c1",
+          "mode": "disaggregated",
+          "backend": "p2p_nccl_socket",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "measurement_iterations": 10,
+          "metrics": ["TTFT", "TPOT"]
+        },
+        {
+          "id": "p3-nccl-32k-c1",
+          "mode": "disaggregated",
+          "backend": "p2p_nccl_socket",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "measurement_iterations": 10,
+          "metrics": ["TTFT", "TPOT"]
+        }
+      ]
     }
   ],
   "analysis_plan": {
-    "primary_hypothesis": "EFA (SRD) will show lower TTFT than TCP due to kernel-bypass and lower network latency for KV-Cache transfer",
+    "primary_hypothesis": "EFA (SRD) will show lower TTFT than TCP due to kernel-bypass and lower network latency for KV-Cache transfer. Additionally, P2pNcclConnector with NCCL Socket may outperform NIXL TCP due to GPU-direct streaming and pipelined layer-wise transfer.",
     "key_comparisons": [
       {
         "metric": "TTFT P50",
