@@ -1,0 +1,202 @@
+{
+  "phase": 3,
+  "name": "g7e EFA vs TCP Performance Comparison (Focused)",
+  "description": "Focused comparison of EFA (UCX+SRD) vs TCP for KV-Cache transfer on g7e.12xlarge (Blackwell RTX PRO 6000). 3 TCP + 3 EFA patterns targeting large context where network overhead is dominant. Includes Unified baseline for overhead calculation.",
+  "created": "2026-03-03",
+  "mlflow_config": {
+    "experiment_name": "nixl-efa-phase3",
+    "timestamp_suffix": true
+  },
+  "infrastructure": {
+    "instance_type": "g7e.12xlarge",
+    "node_count": 2,
+    "model": "Qwen/Qwen2.5-32B-Instruct",
+    "model_size": "32B",
+    "vllm_version": "v0.16.0",
+    "nixl_version": "v0.10.0",
+    "gpu_type": "NVIDIA RTX PRO 6000 Blackwell Server Edition 96GB",
+    "gpu_count_per_node": 4,
+    "tp_size": 4,
+    "efa_bandwidth_gbps": 100,
+    "region": "us-east-1",
+    "placement_group": "cluster",
+    "venv_path": ""
+  },
+  "common_settings": {
+    "max_tokens": 128,
+    "warmup_iterations": 5,
+    "measurement_iterations": 30,
+    "gpu_memory_utilization": 0.9,
+    "max_num_batched_tokens": 8192,
+    "measurement_type": "online",
+    "temperature": 0,
+    "streaming": true,
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": false,
+    "enforce_eager": true
+  },
+  "prompt_lengths": {
+    "standard": {
+      "tokens": [12288, 32768],
+      "labels": ["12K", "32K"]
+    }
+  },
+  "concurrency_levels": [1, 4],
+  "kv_cache_reference": {
+    "_comment": "Qwen2.5-32B-Instruct: layers=64, kv_heads=8, head_dim=128, dtype=bf16",
+    "bytes_per_token": 262144,
+    "sizes": {
+      "12K": {
+        "tokens": 12288,
+        "total_bytes": 3221225472,
+        "total_human": "3.0 GB",
+        "per_gpu_tp4": "768 MB"
+      },
+      "32K": {
+        "tokens": 32768,
+        "total_bytes": 8589934592,
+        "total_human": "8.0 GB",
+        "per_gpu_tp4": "2.0 GB"
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "L1-Unified",
+      "name": "Unified Baseline (g7e)",
+      "priority": "P0",
+      "description": "Single-node Prefill+Decode baseline on g7e. Establishes pure compute TTFT and TPOT baseline for KV-transfer overhead calculation.",
+      "estimated_time_minutes": 30,
+      "vllm_config": {
+        "mode": "unified",
+        "proxy_required": false,
+        "max_model_len": 34816,
+        "port": 8000
+      },
+      "patterns": [
+        {
+          "id": "p3-unified-12k-c1",
+          "mode": "unified",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT"]
+        },
+        {
+          "id": "p3-unified-32k-c1",
+          "mode": "unified",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "metrics": ["TPOT", "TTFT"]
+        }
+      ]
+    },
+    {
+      "id": "L2-EFA",
+      "name": "Disaggregated with EFA (UCX+SRD)",
+      "priority": "P1",
+      "description": "Disaggregated Inference using NIXL UCX backend with SRD transport over EFA. Tests if g7e Blackwell EFA resolves the UCX rma_am/vendor_err 0xf issue observed on g6e.",
+      "estimated_time_minutes": 60,
+      "vllm_config": {
+        "mode": "disaggregated",
+        "max_model_len": 34816,
+        "port": 8100
+      },
+      "patterns": [
+        {
+          "id": "p3-srd-12k-c1",
+          "mode": "disaggregated",
+          "backend": "srd",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "metrics": ["TTFT", "TPOT"],
+          "_rationale": "Moderate KV-Cache (3GB). Per-request EFA latency advantage visible here."
+        },
+        {
+          "id": "p3-srd-32k-c1",
+          "mode": "disaggregated",
+          "backend": "srd",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "metrics": ["TTFT", "TPOT"],
+          "_rationale": "Large KV-Cache (8GB). Maximum per-request transfer - EFA bandwidth advantage."
+        },
+        {
+          "id": "p3-srd-32k-c4",
+          "mode": "disaggregated",
+          "backend": "srd",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 4,
+          "metrics": ["TTFT", "TPOT", "Throughput"],
+          "_rationale": "Large KV-Cache + concurrency. Network queuing stress - where EFA tail latency improvement should be most visible."
+        }
+      ]
+    },
+    {
+      "id": "L3-TCP",
+      "name": "Disaggregated with TCP",
+      "priority": "P1",
+      "description": "Disaggregated Inference using NIXL UCX backend with TCP transport. Control group for EFA comparison.",
+      "estimated_time_minutes": 60,
+      "vllm_config": {
+        "mode": "disaggregated",
+        "max_model_len": 34816,
+        "port": 8100
+      },
+      "patterns": [
+        {
+          "id": "p3-tcp-12k-c1",
+          "mode": "disaggregated",
+          "backend": "tcp",
+          "prompt_tokens": 12288,
+          "prompt_label": "12K",
+          "concurrency": 1,
+          "metrics": ["TTFT", "TPOT"]
+        },
+        {
+          "id": "p3-tcp-32k-c1",
+          "mode": "disaggregated",
+          "backend": "tcp",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 1,
+          "metrics": ["TTFT", "TPOT"]
+        },
+        {
+          "id": "p3-tcp-32k-c4",
+          "mode": "disaggregated",
+          "backend": "tcp",
+          "prompt_tokens": 32768,
+          "prompt_label": "32K",
+          "concurrency": 4,
+          "metrics": ["TTFT", "TPOT", "Throughput"]
+        }
+      ]
+    }
+  ],
+  "analysis_plan": {
+    "primary_hypothesis": "EFA (SRD) will show lower TTFT than TCP due to kernel-bypass and lower network latency for KV-Cache transfer",
+    "key_comparisons": [
+      {
+        "metric": "TTFT P50",
+        "comparison": "SRD vs TCP at same context/concurrency",
+        "expected_improvement": "20-50% reduction in KV-transfer overhead portion"
+      },
+      {
+        "metric": "TTFT P99/P50 ratio",
+        "comparison": "SRD vs TCP tail latency stability",
+        "expected_improvement": "SRD should have much tighter tail (no TCP retransmission)"
+      },
+      {
+        "metric": "TPOT P50",
+        "comparison": "SRD vs TCP (should be similar - decode is GPU-bound)",
+        "expected_improvement": "Minimal difference (both decode locally)"
+      }
+    ],
+    "kv_transfer_overhead": "TCP_TTFT - Unified_TTFT (at c=1) vs SRD_TTFT - Unified_TTFT"
+  }
+}
