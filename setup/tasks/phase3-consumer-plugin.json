@@ -1,0 +1,54 @@
+{
+  "name": "Phase 3 Consumer - Replace NIXL Plugin",
+  "description": "Replace pip NIXL plugin with custom Request/Response plugin",
+  "variables": {
+    "CUSTOM_PLUGIN": "/home/ubuntu/nixl/build/src/plugins/libfabric/libplugin_LIBFABRIC.so",
+    "TARGET_PLUGIN": "/home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins/libplugin_LIBFABRIC.so"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-custom",
+      "name": "Verify Custom NIXL Plugin",
+      "description": "Verify custom-built Request/Response plugin exists",
+      "commands": [
+        "test -f {{CUSTOM_PLUGIN}} && echo '[OK] Custom plugin found' || { echo '[ERROR] Custom plugin not found at {{CUSTOM_PLUGIN}}'; exit 1; }"
+      ]
+    },
+    {
+      "id": "02-replace",
+      "name": "Replace NIXL Plugin",
+      "description": "Replace pip NIXL plugin with custom Request/Response plugin",
+      "commands": [
+        "echo '[INFO] Replacing NIXL plugin...'",
+        "sudo -u ubuntu bash -c 'test -f {{TARGET_PLUGIN}}.original || cp {{TARGET_PLUGIN}} {{TARGET_PLUGIN}}.original'",
+        "sudo -u ubuntu bash -c 'cp {{CUSTOM_PLUGIN}} {{TARGET_PLUGIN}}'",
+        "echo '[OK] Plugin replaced'"
+      ]
+    },
+    {
+      "id": "03-verify",
+      "name": "Verify Plugin Replacement",
+      "description": "Verify Request/Response code in replaced plugin",
+      "commands": [
+        "echo '[INFO] Verifying plugin replacement...'",
+        "strings {{TARGET_PLUGIN}} | grep -q READ_REQUEST && echo '[OK] Plugin contains Request/Response code' || { echo '[ERROR] Plugin verification failed'; exit 1; }",
+        "strings {{TARGET_PLUGIN}} | grep -c READ_REQUEST | awk '{print \"  READ_REQUEST symbols: \"$1}'",
+        "ls -lh {{TARGET_PLUGIN}} | awk '{print \"  Size: \"$5}'",
+        "echo '[OK] Plugin verification complete'"
+      ]
+    },
+    {
+      "id": "04-summary",
+      "name": "Display Summary",
+      "description": "Display final summary",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Consumer vLLM Reinstallation Complete'",
+        "echo '=========================================='",
+        "sudo -u ubuntu bash -c 'python3 -c \"import vllm; print(f\\\"vLLM: {vllm.__version__}\\\")\"'",
+        "echo 'NIXL plugin: Request/Response protocol'",
+        "echo '[OK] Ready to start Consumer'"
+      ]
+    }
+  ]
+}

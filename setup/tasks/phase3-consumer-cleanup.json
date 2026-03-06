@@ -1,0 +1,40 @@
+{
+  "name": "Phase 3 Consumer - Cleanup Processes",
+  "description": "Stop all vLLM processes and clean GPU memory",
+  "variables": {},
+  "tasks": [
+    {
+      "id": "01-stop-vllm",
+      "name": "Stop All vLLM Processes",
+      "description": "Stop all running vLLM and python processes",
+      "commands": [
+        "echo '[INFO] Stopping vLLM processes...'",
+        "sudo pkill -9 -f vllm || true",
+        "sudo pkill -9 -f python || true",
+        "sleep 5",
+        "echo '[OK] Processes stopped'"
+      ]
+    },
+    {
+      "id": "02-clean-gpu",
+      "name": "Clean GPU Memory",
+      "description": "Force kill any remaining GPU processes",
+      "commands": [
+        "echo '[INFO] Cleaning GPU memory...'",
+        "nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r sudo kill -9 || true",
+        "sleep 3",
+        "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk '{print \"[INFO] GPU memory used: \"$1\" MB\"}'",
+        "echo '[OK] GPU memory cleaned'"
+      ]
+    },
+    {
+      "id": "03-verify",
+      "name": "Verify Cleanup",
+      "description": "Verify no ubuntu processes running",
+      "commands": [
+        "pgrep -u ubuntu python && echo '[WARNING] Python processes still running' || echo '[OK] All ubuntu python processes stopped'",
+        "echo '[OK] Cleanup complete'"
+      ]
+    }
+  ]
+}

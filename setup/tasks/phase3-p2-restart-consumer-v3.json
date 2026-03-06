@@ -1,0 +1,30 @@
+{
+  "name": "Phase 3 P2 Investigation - Restart Consumer (v3 correct config)",
+  "description": "Restart Consumer with backends in kv_connector_extra_config",
+  "variables": {},
+  "tasks": [
+    {
+      "id": "01-stop-processes",
+      "name": "Stop Existing vLLM Processes",
+      "commands": [
+        "pkill -9 -f vllm || true",
+        "sleep 3"
+      ]
+    },
+    {
+      "id": "02-start-consumer",
+      "name": "Start Consumer",
+      "commands": [
+        "cd /home/ubuntu && FI_LOG_LEVEL=debug VLLM_NIXL_SIDE_CHANNEL_HOST=172.31.2.221 VLLM_NIXL_SIDE_CHANNEL_PORT=50100 NIXL_LOG_LEVEL=TRACE nohup python3 -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-32B-Instruct --port 8200 --tensor-parallel-size 2 --gpu-memory-utilization 0.9 --max-model-len 32000 --max-num-batched-tokens 8192 '--kv-transfer-config' '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_consumer\",\"kv_rank\":0,\"kv_parallel_size\":1,\"kv_buffer_device\":\"cpu\",\"kv_buffer_size\":5000000000,\"kv_ip\":\"172.31.2.221\",\"kv_port\":14579,\"kv_connector_extra_config\":{\"backends\":[\"LIBFABRIC\"]}}' > /home/ubuntu/consumer_p2.log 2>&1 & echo \"[OK] Consumer started with PID: $!\"; sleep 10"
+      ]
+    },
+    {
+      "id": "03-verify-startup",
+      "name": "Verify Startup",
+      "commands": [
+        "pgrep -f 'vllm.entrypoints.openai.api_server' && echo '[OK] Process running' || echo '[ERROR] Process not running'",
+        "tail -20 /home/ubuntu/consumer_p2.log"
+      ]
+    }
+  ]
+}

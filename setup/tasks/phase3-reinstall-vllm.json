@@ -1,0 +1,112 @@
+{
+  "name": "Phase 3 - Reinstall vLLM (Fix C++ Extension)",
+  "description": "Force reinstall vLLM to fix C++ extension module error, then replace NIXL plugin",
+  "variables": {
+    "VLLM_VERSION": "0.16.0",
+    "CUSTOM_PLUGIN": "/home/ubuntu/nixl/build/src/plugins/libfabric/libplugin_LIBFABRIC.so",
+    "TARGET_PLUGIN": "/home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins/libplugin_LIBFABRIC.so"
+  },
+  "tasks": [
+    {
+      "id": "01-stop-vllm",
+      "name": "Stop All vLLM Processes",
+      "description": "Stop all running vLLM processes before reinstall",
+      "commands": [
+        "pkill -9 -f vllm || true",
+        "pkill -9 -f python || true",
+        "sleep 3",
+        "nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 || true",
+        "sleep 2",
+        "echo '[OK] All processes stopped'"
+      ]
+    },
+    {
+      "id": "02-uninstall-vllm",
+      "name": "Uninstall vLLM",
+      "description": "Uninstall existing vLLM package",
+      "commands": [
+        "echo '[INFO] Uninstalling vLLM...'",
+        "pip uninstall -y vllm || true",
+        "echo '[OK] vLLM uninstalled'"
+      ]
+    },
+    {
+      "id": "03-clean-cache",
+      "name": "Clean pip Cache",
+      "description": "Clean pip cache to ensure fresh install",
+      "commands": [
+        "echo '[INFO] Cleaning pip cache...'",
+        "pip cache purge",
+        "echo '[OK] Cache cleaned'"
+      ]
+    },
+    {
+      "id": "04-reinstall-vllm",
+      "name": "Reinstall vLLM",
+      "description": "Force reinstall vLLM 0.16.0 with no cache",
+      "commands": [
+        "echo '[INFO] Reinstalling vLLM {{VLLM_VERSION}}...'",
+        "pip install --force-reinstall --no-cache-dir vllm=={{VLLM_VERSION}}",
+        "echo '[OK] vLLM reinstalled'"
+      ]
+    },
+    {
+      "id": "05-verify-vllm",
+      "name": "Verify vLLM Installation",
+      "description": "Verify vLLM can be imported without errors",
+      "commands": [
+        "echo '[INFO] Verifying vLLM installation...'",
+        "python3 -c 'import vllm; print(f\"[OK] vLLM version: {vllm.__version__}\")'",
+        "python3 -c 'from vllm import LLM, SamplingParams; print(\"[OK] vLLM imports successful\")'",
+        "echo '[OK] vLLM verification complete'"
+      ]
+    },
+    {
+      "id": "06-verify-custom-plugin",
+      "name": "Verify Custom NIXL Plugin",
+      "description": "Verify custom-built Request/Response plugin exists",
+      "skip_if": "test -f {{CUSTOM_PLUGIN}}",
+      "commands": [
+        "echo '[ERROR] Custom plugin not found at {{CUSTOM_PLUGIN}}'",
+        "exit 1"
+      ]
+    },
+    {
+      "id": "07-replace-nixl-plugin",
+      "name": "Replace NIXL Plugin",
+      "description": "Replace pip NIXL plugin with custom Request/Response plugin",
+      "commands": [
+        "echo '[INFO] Replacing NIXL plugin...'",
+        "test -f {{TARGET_PLUGIN}}.original || cp {{TARGET_PLUGIN}} {{TARGET_PLUGIN}}.original",
+        "cp {{CUSTOM_PLUGIN}} {{TARGET_PLUGIN}}",
+        "echo '[OK] Plugin replaced'"
+      ]
+    },
+    {
+      "id": "08-verify-plugin-replacement",
+      "name": "Verify Plugin Replacement",
+      "description": "Verify Request/Response code in replaced plugin",
+      "commands": [
+        "echo '[INFO] Verifying plugin replacement...'",
+        "strings {{TARGET_PLUGIN}} | grep -q READ_REQUEST && echo '[OK] Plugin contains Request/Response code' || { echo '[ERROR] Plugin verification failed'; exit 1; }",
+        "strings {{TARGET_PLUGIN}} | grep -c READ_REQUEST | awk '{print \"  READ_REQUEST symbols: \"$1}'",
+        "ls -lh {{TARGET_PLUGIN}} | awk '{print \"  Plugin size: \"$5\", Modified: \"$6\" \"$7\" \"$8}'",
+        "echo '[OK] Plugin verification complete'"
+      ]
+    },
+    {
+      "id": "09-final-summary",
+      "name": "Display Final Summary",
+      "description": "Display installation summary",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'vLLM Reinstallation Complete'",
+        "echo '=========================================='",
+        "python3 -c 'import vllm; print(f\"vLLM version: {vllm.__version__}\")'",
+        "echo 'NIXL plugin: Request/Response protocol active'",
+        "echo '=========================================='",
+        "echo '[OK] Ready to start vLLM with disaggregated inference'"
+      ]
+    }
+  ]
+}

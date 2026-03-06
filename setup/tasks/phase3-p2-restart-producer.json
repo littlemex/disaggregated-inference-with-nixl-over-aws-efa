@@ -1,0 +1,65 @@
+{
+  "name": "Phase 3 P2 Investigation - Restart Producer (Decode)",
+  "description": "Stop existing processes and restart Producer with FI_LOG_LEVEL=debug for Request/Response protocol investigation",
+  "variables": {},
+  "tasks": [
+    {
+      "id": "01-stop-existing-processes",
+      "name": "Stop Existing vLLM Processes",
+      "description": "Kill all running vLLM processes",
+      "commands": [
+        "pkill -9 -f 'vllm.entrypoints.openai.api_server' || true",
+        "pkill -9 -f 'vllm_worker' || true",
+        "sleep 3",
+        "pgrep -f vllm || echo '[OK] All vLLM processes stopped'"
+      ]
+    },
+    {
+      "id": "02-verify-plugin",
+      "name": "Verify Plugin Replacement",
+      "description": "Verify custom-built Request/Response protocol plugin is active",
+      "commands": [
+        "strings /home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins/libplugin_LIBFABRIC.so | grep -q 'READ_REQUEST' && echo '[OK] Plugin verified' || { echo '[ERROR] Plugin verification failed'; exit 1; }"
+      ]
+    },
+    {
+      "id": "03-start-producer",
+      "name": "Start Producer (Decode) with DEBUG Logging",
+      "description": "Start vLLM as Producer with FI_LOG_LEVEL=debug, NIXL_LOG_LEVEL=TRACE",
+      "commands": [
+        "cd /home/ubuntu && FI_LOG_LEVEL=debug VLLM_NIXL_SIDE_CHANNEL_HOST=172.31.2.221 VLLM_NIXL_SIDE_CHANNEL_PORT=50100 NIXL_LOG_LEVEL=TRACE VLLM_LOGGING_LEVEL=DEBUG nohup python3 -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-32B-Instruct --port 8100 --tensor-parallel-size 2 --distributed-executor-backend mp --gpu-memory-utilization 0.9 --max-model-len 32000 --max-num-batched-tokens 8192 --kv-connector NixlConnector --kv-role kv_producer --kv-rank 0 --kv-parallel-size 1 --kv-buffer-device cpu --kv-buffer-size 5G > /home/ubuntu/producer_p2.log 2>&1 & echo \"[OK] Producer started with PID: $!\""
+      ]
+    },
+    {
+      "id": "04-wait-startup",
+      "name": "Wait for Startup",
+      "description": "Wait 120 seconds for vLLM to complete initialization",
+      "commands": [
+        "echo '[INFO] Waiting 120s for startup...'",
+        "sleep 120",
+        "echo '[OK] Startup wait complete'"
+      ]
+    },
+    {
+      "id": "05-verify-port",
+      "name": "Verify Port Listening",
+      "description": "Verify vLLM is listening on port 8100",
+      "commands": [
+        "ss -tlnp | grep -q ':8100' && echo '[OK] Producer listening on port 8100' || { echo '[ERROR] Producer not listening'; exit 1; }"
+      ]
+    },
+    {
+      "id": "06-check-logs",
+      "name": "Check Initial Logs",
+      "description": "Display first 100 lines of Producer logs",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Producer P2 Logs (first 100 lines)'",
+        "echo '=========================================='",
+        "head -100 /home/ubuntu/producer_p2.log",
+        "echo '=========================================='",
+        "echo '[OK] Full logs at: /home/ubuntu/producer_p2.log'"
+      ]
+    }
+  ]
+}

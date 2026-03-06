@@ -1,0 +1,88 @@
+{
+  "name": "Phase 3 NIXL Plugin Replacement - Request/Response Protocol",
+  "description": "Replace pip-installed NIXL plugin with custom-built Request/Response protocol plugin for EFA two-sided messaging support",
+  "variables": {
+    "CUSTOM_PLUGIN": "/home/ubuntu/nixl/build/src/plugins/libfabric/libplugin_LIBFABRIC.so",
+    "TARGET_PLUGIN": "/home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins/libplugin_LIBFABRIC.so",
+    "BACKUP_PLUGIN": "/home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins/libplugin_LIBFABRIC.so.original"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-custom-plugin",
+      "name": "Verify Custom Plugin Exists",
+      "description": "Verify that the custom-built Request/Response protocol plugin exists",
+      "skip_if": "test -f {{CUSTOM_PLUGIN}}",
+      "commands": [
+        "echo '[ERROR] Custom plugin not found at {{CUSTOM_PLUGIN}}'",
+        "echo '[ERROR] Build NIXL with Request/Response protocol first'",
+        "exit 1"
+      ]
+    },
+    {
+      "id": "02-verify-request-response-code",
+      "name": "Verify Request/Response Code in Custom Plugin",
+      "description": "Verify that the custom plugin contains Request/Response protocol code (READ_REQUEST, READ_RESPONSE)",
+      "commands": [
+        "echo '[INFO] Verifying Request/Response code in custom plugin...'",
+        "strings {{CUSTOM_PLUGIN}} | grep -q 'READ_REQUEST' && echo '[OK] Custom plugin contains Request/Response code' || { echo '[ERROR] Custom plugin does not contain READ_REQUEST symbol'; echo '[ERROR] This plugin may not be built with Request/Response protocol'; exit 1; }"
+      ]
+    },
+    {
+      "id": "03-backup-original",
+      "name": "Backup Original pip Plugin",
+      "description": "Create backup of original pip-installed plugin (only if not already backed up)",
+      "skip_if": "test -f {{BACKUP_PLUGIN}}",
+      "commands": [
+        "echo '[INFO] Creating backup of original pip plugin...'",
+        "cp {{TARGET_PLUGIN}} {{BACKUP_PLUGIN}}",
+        "ls -lh {{BACKUP_PLUGIN}}",
+        "echo '[OK] Original plugin backed up'"
+      ]
+    },
+    {
+      "id": "04-replace-plugin",
+      "name": "Replace with Custom Plugin",
+      "description": "Replace pip plugin with custom-built Request/Response protocol plugin",
+      "commands": [
+        "echo '[INFO] Replacing pip plugin with custom-built plugin...'",
+        "cp {{CUSTOM_PLUGIN}} {{TARGET_PLUGIN}}",
+        "ls -lh {{TARGET_PLUGIN}}",
+        "echo '[OK] Plugin replaced'"
+      ]
+    },
+    {
+      "id": "05-verify-replacement",
+      "name": "Verify Plugin Replacement",
+      "description": "Verify that the replaced plugin contains Request/Response code",
+      "commands": [
+        "echo '[INFO] Verifying replaced plugin...'",
+        "strings {{TARGET_PLUGIN}} | grep -q 'READ_REQUEST' && { echo '[OK] Replaced plugin contains Request/Response code'; strings {{TARGET_PLUGIN}} | grep -E '(READ_REQUEST|READ_RESPONSE|WRITE_REQUEST|WRITE_RESPONSE)' | head -4; } || { echo '[ERROR] Replaced plugin verification failed'; echo '[ERROR] Restoring original plugin...'; cp {{BACKUP_PLUGIN}} {{TARGET_PLUGIN}}; exit 1; }"
+      ]
+    },
+    {
+      "id": "06-display-plugin-info",
+      "name": "Display Plugin Information",
+      "description": "Display plugin path and size information for verification",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'NIXL Plugin Replacement Complete'",
+        "echo '=========================================='",
+        "echo ''",
+        "echo 'Plugin Locations:'",
+        "echo '  Custom plugin: {{CUSTOM_PLUGIN}}'",
+        "ls -lh {{CUSTOM_PLUGIN}} | awk '{print \"    Size: \"$5\", Modified: \"$6\" \"$7\" \"$8}'",
+        "echo ''",
+        "echo '  Active plugin: {{TARGET_PLUGIN}}'",
+        "ls -lh {{TARGET_PLUGIN}} | awk '{print \"    Size: \"$5\", Modified: \"$6\" \"$7\" \"$8}'",
+        "echo ''",
+        "echo '  Backup plugin: {{BACKUP_PLUGIN}}'",
+        "ls -lh {{BACKUP_PLUGIN}} 2>/dev/null | awk '{print \"    Size: \"$5\", Modified: \"$6\" \"$7\" \"$8}' || echo '    [Not found]'",
+        "echo ''",
+        "echo 'Verification:'",
+        "strings {{TARGET_PLUGIN}} | grep -c 'READ_REQUEST' | awk '{print \"  READ_REQUEST symbols: \"$1}'",
+        "echo ''",
+        "echo '[OK] Plugin replacement successful'"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "Phase 3 Consumer - Uninstall vLLM",
+  "description": "Uninstall vLLM and clean pip cache",
+  "variables": {},
+  "tasks": [
+    {
+      "id": "01-uninstall",
+      "name": "Uninstall vLLM",
+      "description": "Uninstall existing vLLM package",
+      "commands": [
+        "echo '[INFO] Uninstalling vLLM...'",
+        "sudo -u ubuntu bash -c 'pip uninstall -y vllm || true'",
+        "echo '[OK] vLLM uninstalled'"
+      ]
+    },
+    {
+      "id": "02-clean-cache",
+      "name": "Clean pip Cache",
+      "description": "Clean pip cache to ensure fresh install",
+      "commands": [
+        "echo '[INFO] Cleaning pip cache...'",
+        "sudo -u ubuntu bash -c 'pip cache purge'",
+        "echo '[OK] Cache cleaned'"
+      ]
+    },
+    {
+      "id": "03-verify",
+      "name": "Verify Uninstallation",
+      "description": "Verify vLLM is uninstalled",
+      "commands": [
+        "sudo -u ubuntu bash -c 'pip show vllm' && echo '[WARNING] vLLM still installed' || echo '[OK] vLLM successfully uninstalled'"
+      ]
+    }
+  ]
+}

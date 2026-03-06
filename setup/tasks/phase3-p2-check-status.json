@@ -1,0 +1,46 @@
+{
+  "name": "Phase 3 P2 Investigation - Check vLLM Status",
+  "description": "Check if vLLM processes are running and listening on ports after restart",
+  "variables": {},
+  "tasks": [
+    {
+      "id": "01-check-processes",
+      "name": "Check vLLM Processes",
+      "description": "List all running vLLM processes",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Running vLLM Processes'",
+        "echo '=========================================='",
+        "ps aux | grep -E 'vllm\\.entrypoints|vllm_worker' | grep -v grep || echo '[INFO] No vLLM processes found'",
+        "echo '=========================================='
+      ]
+    },
+    {
+      "id": "02-check-ports",
+      "name": "Check Port Listening",
+      "description": "Check if ports 8100 and 8200 are listening",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Port Listening Status'",
+        "echo '=========================================='",
+        "ss -tlnp | grep -E ':(8100|8200|50100)' || echo '[INFO] No ports listening'",
+        "echo '=========================================='
+      ]
+    },
+    {
+      "id": "03-check-log-files",
+      "name": "Check Log Files",
+      "description": "Check if log files exist and show last 50 lines",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'Log Files Status'",
+        "echo '=========================================='",
+        "ls -lh /home/ubuntu/*_p2.log 2>/dev/null || echo '[INFO] No P2 log files found'",
+        "echo ''",
+        "if [ -f /home/ubuntu/producer_p2.log ]; then echo '[INFO] Producer P2 Log (last 50 lines):'; tail -50 /home/ubuntu/producer_p2.log | grep -E '(Application startup|Uvicorn running|Loading plugins|NIXL|ERROR|Started)'; fi",
+        "if [ -f /home/ubuntu/consumer_p2.log ]; then echo '[INFO] Consumer P2 Log (last 50 lines):'; tail -50 /home/ubuntu/consumer_p2.log | grep -E '(Application startup|Uvicorn running|Loading plugins|NIXL|ERROR|Started)'; fi",
+        "echo '=========================================='
+      ]
+    }
+  ]
+}

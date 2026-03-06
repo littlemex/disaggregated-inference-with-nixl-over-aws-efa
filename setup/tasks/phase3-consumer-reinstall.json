@@ -1,0 +1,32 @@
+{
+  "name": "Phase 3 Consumer - Reinstall vLLM",
+  "description": "Force reinstall vLLM 0.16.0 (takes 5-10 minutes)",
+  "variables": {
+    "VLLM_VERSION": "0.16.0"
+  },
+  "tasks": [
+    {
+      "id": "01-reinstall",
+      "name": "Reinstall vLLM",
+      "description": "Force reinstall vLLM 0.16.0 (this takes 5-10 minutes)",
+      "commands": [
+        "echo '[INFO] Reinstalling vLLM {{VLLM_VERSION}} (this may take 5-10 minutes)...'",
+        "echo '[INFO] Start time: '$(date +'%Y-%m-%d %H:%M:%S')",
+        "sudo -u ubuntu bash -c 'pip install --force-reinstall --no-cache-dir vllm=={{VLLM_VERSION}}'",
+        "echo '[INFO] End time: '$(date +'%Y-%m-%d %H:%M:%S')",
+        "echo '[OK] vLLM reinstalled'"
+      ]
+    },
+    {
+      "id": "02-verify",
+      "name": "Verify vLLM Installation",
+      "description": "Verify vLLM can be imported",
+      "commands": [
+        "echo '[INFO] Verifying vLLM installation...'",
+        "sudo -u ubuntu bash -c 'python3 -c \"import vllm; print(f\\\"[OK] vLLM version: {vllm.__version__}\\\")\"'",
+        "sudo -u ubuntu bash -c 'python3 -c \"from vllm import LLM, SamplingParams; print(\\\"[OK] vLLM imports successful\\\")\"'",
+        "echo '[OK] vLLM verification complete'"
+      ]
+    }
+  ]
+}

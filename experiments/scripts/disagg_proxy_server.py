@@ -103,7 +103,7 @@ class DisaggregatedProxyServerV2:
         async with self.session.post(
             f"{self.prefill_url}/v1/completions",
             json=prefill_data,
-            timeout=aiohttp.ClientTimeout(total=120),
+            timeout=aiohttp.ClientTimeout(total=300),
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -172,7 +172,7 @@ class DisaggregatedProxyServerV2:
         async with self.session.post(
             f"{self.decode_url}/v1/completions",
             json=decode_data,
-            timeout=aiohttp.ClientTimeout(total=300),
+            timeout=aiohttp.ClientTimeout(total=600, sock_read=600),
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
