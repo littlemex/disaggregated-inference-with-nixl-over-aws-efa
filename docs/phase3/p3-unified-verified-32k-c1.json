@@ -1,0 +1,99 @@
+{
+  "benchmark": "Phase 3 Unified Benchmark",
+  "layer": "L1-Unified",
+  "pattern": "32k-c1",
+  "description": "Single-node unified (verified input)",
+  "timestamp": "20260304_154944",
+  "config": {
+    "model": "Qwen/Qwen2.5-32B-Instruct",
+    "url": "http://localhost:8100/v1/chat/completions",
+    "warmup": 2,
+    "n": 10,
+    "input_file": "/tmp/benchmark_input_32k.txt",
+    "input_sha256": "35c13cf9233798c5460f1e4682e99e0d832bf57ef15b0f3f3cb41cdeb178cb39",
+    "input_length": 162510
+  },
+  "statistics": {
+    "n": 10,
+    "ttft_ms": {
+      "avg": 2062.3,
+      "min": 1505,
+      "max": 6873,
+      "p50": 1530.5,
+      "p99": 6873,
+      "stdev": 1690.3269933490515
+    }
+  },
+  "results": [
+    {
+      "request_num": 1,
+      "ttft_ms": 6873,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:20"
+    },
+    {
+      "request_num": 2,
+      "ttft_ms": 1505,
+      "prompt_tokens": 32599,
+      "completion_tokens": 49,
+      "timestamp": "2026-03-04 15:49:23"
+    },
+    {
+      "request_num": 3,
+      "ttft_ms": 1532,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:25"
+    },
+    {
+      "request_num": 4,
+      "ttft_ms": 1530,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:28"
+    },
+    {
+      "request_num": 5,
+      "ttft_ms": 1530,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:31"
+    },
+    {
+      "request_num": 6,
+      "ttft_ms": 1531,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:33"
+    },
+    {
+      "request_num": 7,
+      "ttft_ms": 1531,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:36"
+    },
+    {
+      "request_num": 8,
+      "ttft_ms": 1531,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:38"
+    },
+    {
+      "request_num": 9,
+      "ttft_ms": 1530,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:41"
+    },
+    {
+      "request_num": 10,
+      "ttft_ms": 1530,
+      "prompt_tokens": 32599,
+      "completion_tokens": 50,
+      "timestamp": "2026-03-04 15:49:43"
+    }
+  ]
+}

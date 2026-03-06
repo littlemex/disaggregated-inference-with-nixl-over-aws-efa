@@ -1,0 +1,12 @@
+{
+  "12k": {
+    "target": 12288,
+    "actual": 12210,
+    "valid": true
+  },
+  "32k": {
+    "target": 32768,
+    "actual": 32570,
+    "valid": true
+  }
+}

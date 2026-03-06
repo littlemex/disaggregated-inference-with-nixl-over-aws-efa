@@ -1,0 +1,36 @@
+{
+  "benchmark": "Phase 3 L2-EFA (NIXL LIBFABRIC two-sided)",
+  "pattern": "32k-c1",
+  "timestamp": "20260304_150725",
+  "config": {
+    "model": "Qwen/Qwen2.5-32B-Instruct",
+    "tensor_parallel_size": 2,
+    "kv_connector": "NixlConnector",
+    "backend": "LIBFABRIC (two-sided)",
+    "kv_buffer_device": "cpu",
+    "note": "prompt_tokens=4125 (tokenizer compressed input)"
+  },
+  "statistics": {
+    "n": 10,
+    "ttft_ms": {
+      "avg": 1245.8,
+      "min": 813,
+      "max": 1335,
+      "p50": 1334.0,
+      "p99": 1335,
+      "stdev": 173.87
+    }
+  },
+  "results": [
+    {"request_num": 1, "ttft_ms": 1334, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 2, "ttft_ms": 1335, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 3, "ttft_ms": 1334, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 4, "ttft_ms": 1334, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 5, "ttft_ms": 1334, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 6, "ttft_ms": 1335, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 7, "ttft_ms": 1335, "prompt_tokens": 4125, "completion_tokens": 50},
+    {"request_num": 8, "ttft_ms": 1074, "prompt_tokens": 4125, "completion_tokens": 40},
+    {"request_num": 9, "ttft_ms": 1230, "prompt_tokens": 4125, "completion_tokens": 46},
+    {"request_num": 10, "ttft_ms": 813, "prompt_tokens": 4125, "completion_tokens": 30}
+  ]
+}
