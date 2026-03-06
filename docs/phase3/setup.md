@@ -1717,3 +1717,167 @@ P1 調査で handshake が正しいことが判明したため、次は以下を
 **最終更新**: 2026-03-06 15:45
 **重要**: handshake の tp_rank マッピングは正しい。問題は READ_REQUEST の送受信メカニズムにある。
 
+
+---
+
+## 15. Proxy サーバー起動 [P2 調査成功後]
+
+**日付**: 2026-03-06 18:30
+**ステータス**: ✅ Disaggregated inference over EFA 成功
+
+### 15.1 Proxy の役割
+
+Disaggregated inference を動作させるには、**Proxy サーバー**が必要です：
+
+1. **Prefill リクエスト** → Producer (`do_remote_decode: true` パラメータ付き)
+2. **Decode リクエスト** → Consumer (kv_transfer_params を渡す)
+
+### 15.2 Proxy 起動手順
+
+#### Consumer ノード (Node2) で実行
+
+```bash
+# 方法1: 自動スクリプト（推奨）
+cd /work/data-science/disaggregated-inference-with-nixl-over-aws-efa/setup/scripts
+./start-proxy.sh 172.31.2.221 172.31.10.117 8000
+
+# 方法2: 手動起動
+cd /home/ubuntu
+nohup python3 disagg_proxy_server.py \
+    --prefill-url http://172.31.2.221:8100 \
+    --decode-url http://172.31.10.117:8200 \
+    --port 8000 \
+    > proxy.log 2>&1 &
+```
+
+#### 確認
+
+```bash
+# プロセス確認
+pgrep -f disagg_proxy_server.py
+
+# ポート確認
+netstat -tlnp | grep :8000
+# または
+ss -tlnp | grep :8000
+
+# ログ確認
+tail -f /home/ubuntu/proxy.log
+```
+
+### 15.3 Disaggregated Inference テスト
+
+#### テストリクエスト送信
+
+```bash
+# 方法1: 自動スクリプト（推奨）
+cd /work/data-science/disaggregated-inference-with-nixl-over-aws-efa/setup/scripts
+./test-p2-disagg.sh 172.31.10.117 8000
+
+# 方法2: 手動テスト
+curl -X POST http://172.31.10.117:8000/v1/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "Qwen/Qwen2.5-32B-Instruct",
+        "prompt": "Hello via Proxy",
+        "max_tokens": 10
+    }'
+```
+
+#### 期待される動作
+
+1. **Proxy ログ** (`/home/ubuntu/proxy.log`):
+   ```
+   [Proxy] Received request
+   [Prefill] Sending request to Producer (max_tokens=1, do_remote_decode=true)
+   [Prefill] Completed in ~40 ms, kv_transfer_params={...}
+   [Decode] Sending request with kv_transfer_params
+   ```
+
+2. **Producer ログ** (`/home/ubuntu/producer_p2.log`):
+   ```
+   [P1_LOG] _nixl_handshake_listener: received request for target_tp_rank=0
+   [P1_LOG] _nixl_handshake_listener: received request for target_tp_rank=1
+   ```
+
+3. **Consumer ログ** (`/home/ubuntu/consumer_p2.log`):
+   ```
+   Consumer sent READ_REQUEST for xfer_id=1025 to Producer
+   ```
+
+### 15.4 トラブルシューティング
+
+#### Proxy が起動しない
+
+```bash
+# 依存パッケージ確認
+pip list | grep aiohttp
+
+# aiohttp がない場合
+pip install aiohttp
+
+# Proxy スクリプトが存在しない場合
+# リポジトリから取得
+cd /work/data-science/disaggregated-inference-with-nixl-over-aws-efa
+git pull origin phase3-p2-consumer-reinstall
+```
+
+#### リクエストが 404 エラー
+
+- Proxy は `/v1/completions` エンドポイントを使用（`/v1/chat/completions` ではない）
+- 正しい: `http://IP:8000/v1/completions`
+- 誤り: `http://IP:8000/v1/chat/completions`
+
+#### Prefill または Decode が失敗
+
+```bash
+# Producer が起動しているか確認
+pgrep -f "port 8100"
+
+# Consumer が起動しているか確認
+pgrep -f "port 8200"
+
+# ログでエラー確認
+tail -50 /home/ubuntu/producer_p2.log
+tail -50 /home/ubuntu/consumer_p2.log
+tail -50 /home/ubuntu/proxy.log
+```
+
+---
+
+## 16. P2 調査結果まとめ
+
+### 成功した検証項目
+
+**1. NIXL handshake** ✅
+- Producer が Consumer からの handshake を受信
+- tp_rank マッピングが正しい（TP0 → TP0, TP1 → TP1）
+
+**2. READ_REQUEST フロー** ✅
+- Consumer が Producer に READ_REQUEST を送信
+- 128 個の READ リクエスト（各 16384 バイト、合計 2MB）
+
+**3. Disaggregated Inference フロー** ✅
+1. Proxy → Producer (Prefill リクエスト)
+2. Producer が Prefill 実行（~40 ms）
+3. Producer が kv_transfer_params を返す
+4. Proxy → Consumer (Decode リクエスト + kv_transfer_params)
+5. Consumer → Producer (READ_REQUEST 送信)
+
+### NIXL Request/Response プロトコルが正常に動作
+
+Phase 2 で失敗した `fi_read()` (one-sided RDMA) の代わりに、**Request/Response プロトコル（two-sided messaging）**が成功しています。
+
+### Phase 2 との比較
+
+| 項目 | Phase 2 (L40S) | Phase 3 (RTX PRO 6000) |
+|------|---------------|------------------------|
+| Transport | EFA (libfabric) | EFA (libfabric) |
+| Protocol | ❌ fi_read() (one-sided) | ✅ Request/Response (two-sided) |
+| NIXL Plugin | ❌ UCX backend | ✅ LIBFABRIC backend |
+| Result | ❌ fi_read EAGAIN | ✅ **成功** |
+
+---
+
+**最終更新**: 2026-03-06 18:40
+**ステータス**: ✅ P2 調査完了 - Disaggregated inference over EFA が動作
