@@ -52,3 +52,9 @@ experiments/results/phase2*/
 # Experiments: temporary files
 experiments/*.log
 experiments/tmp/
+
+# Phase 3: confidential investigation documents
+phase3/*/confidential/
+
+# Phase 3: node-specific config files with credentials
+phase3/*/config.json
