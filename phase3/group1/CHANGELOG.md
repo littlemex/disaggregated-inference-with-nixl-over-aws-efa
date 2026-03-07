@@ -2,19 +2,25 @@
 
 All notable changes to Phase 3 investigation will be documented in this file.
 
-## [2026-03-07] - BREAKTHROUGH: Root Cause Identified
+## [2026-03-07] - INVESTIGATION: NIXL Request/Response Protocol Issues
 
 ### Added
 
 - **vLLM-style TCP implementation** (`request_response_example_tcp.cpp`)
   - Descriptor list exchange via ZMQ/TCP instead of genNotif()
   - Notification reserved for transfer completion only
-  - Avoids EFA connection establishment issue
+  - Attempted to avoid EFA connection establishment issue
+
+- **TCP Control Channel implementation** (v2 of tcp implementation)
+  - Complete control plane via ZMQ/TCP
+  - Data plane via RDMA WRITE
+  - Tested but RDMA transfer times out
 
 - **Investigation breakthrough document** (`INVESTIGATION_BREAKTHROUGH_2026-03-07.md`)
   - Complete root cause analysis
   - 3 parallel Opus 4.6 agent findings
-  - Technical solution with architecture diagram
+  - Technical solution attempts with results
+  - Validation test results
 
 - **Minimal libfabric test** (`/tmp/test_libfabric_senddata.cpp`)
   - Isolated reproduction of genNotif() issue
@@ -23,25 +29,34 @@ All notable changes to Phase 3 investigation will be documented in this file.
 
 ### Changed
 
-- **README.md**: Added breakthrough announcement at top
+- **README.md**: Added investigation status
 - **confidential/README2.md**: Comprehensive investigation log updated
 
 ### Discovered
 
-- **Root Cause**: genNotif() fi_senddata() called before EFA RDM connection established
+- **Root Cause 1**: genNotif() fi_senddata() called before EFA RDM connection established
   - First RDMA operation (READ_REQUEST) triggers CONNREQ/CONNRESP
   - genNotif() must wait until connection ready
   - vLLM avoids this by using separate TCP channel
+
+- **Root Cause 2**: NIXL Request/Response protocol implementation incomplete
+  - Control message methods declared in .cpp but not in .h files
+  - `processRecvCompletion()` only handles NOTIFICATION messages
+  - Control messages (READ_REQUEST/WRITE_REQUEST) fall through to error
+  - `ControlMessageType` enum missing CONTROL_MESSAGE type
+  - Both NIXL_READ and NIXL_WRITE operations fail
 
 - **EFA Provider Behavior**:
   - fi_senddata() succeeds at API level (ret=0)
   - But SEND/RECV completions never arrive if connection not established
   - "Closing EP with unacked CONNREQs in flight" error on exit
+  - CONNREQ/CONNRESP handshake never completes
 
-### Fixed
+### Status
 
-- **genNotif() timing issue**: Replaced with TCP/ZMQ descriptor exchange
-- **Connection establishment**: RDMA transfer now establishes connection before notification
+- [BLOCKED] NIXL Request/Response protocol not usable in current state
+- [IDENTIFIED] Multiple implementation layers incomplete
+- [TESTED] TCP Control Channel approach also fails at RDMA layer
 
 ### Investigation Team
 

@@ -338,8 +338,100 @@ Based on vLLM success pattern:
 
 **Date**: 2026-03-07
 **Duration**: Full-day investigation
-**Outcome**: ROOT CAUSE IDENTIFIED + SOLUTION IMPLEMENTED
+**Outcome**: ROOT CAUSE IDENTIFIED + DEEPER ISSUES DISCOVERED
 
 ---
 
-**Status**: READY FOR VALIDATION TESTING
+## Validation Test Results (2026-03-07 Evening)
+
+### Test 1: vLLM-style TCP Pattern
+
+**Result**: PARTIAL SUCCESS
+
+- [OK] ZMQ descriptor list exchange via TCP
+- [OK] Metadata exchange (Producer ⇔ Consumer)
+- [NG] RDMA READ request not received by Producer
+- [NG] "unacked CONNREQs in flight" error persists
+
+**Finding**: NIXL_READ control message path is not implemented correctly.
+
+---
+
+### Test 2: TCP Control Channel Pattern (RDMA WRITE)
+
+**Approach**: Complete control plane via TCP, data plane via RDMA WRITE
+
+**Implementation**:
+```
+1. Metadata exchange (TCP) - OK
+2. Descriptor list exchange (ZMQ port+1) - OK
+3. START_TRANSFER request (ZMQ) - OK
+4. RDMA WRITE transfer (Producer → Consumer) - NG
+5. TRANSFER_COMPLETE response (ZMQ) - Not reached
+```
+
+**Result**: RDMA TRANSFER TIMEOUT
+
+**Producer Log**:
+```
+[Producer] WRITE transfer request created
+[Producer] WRITE transfer request posted
+[Producer] Waiting for WRITE transfer completion...
+[Producer] Timeout waiting for WRITE transfer completion
+```
+
+**Consumer Log**:
+```
+[Consumer] Sent START_TRANSFER request with descriptor list
+[Consumer] Waiting for TRANSFER_COMPLETE...
+[timeout after 90 seconds]
+```
+
+---
+
+### Root Cause Analysis (Opus 4.6 Deep Dive)
+
+**CRITICAL Issues Identified**:
+
+1. **Control Message Infrastructure Missing**
+   - `sendControlMessage()` declared in .cpp but not in .h
+   - `setControlMessageHandler()` not declared in header
+   - `isControlRail()` not declared in header
+   - `handleControlMessage()` not declared in backend.h
+   - `ProducerTransferContext` structure not defined in header
+
+2. **Receive Path Incomplete**
+   - `processRecvCompletion()` only handles `NIXL_LIBFABRIC_MSG_NOTIFICTION` (value=2)
+   - Control messages fall through to "Unknown message type" error
+   - No routing logic for READ_REQUEST/WRITE_REQUEST
+
+3. **Message Type Enum Incomplete**
+   - `ControlMessageType` enum only has `NOTIFICATION`
+   - Missing `CONTROL_MESSAGE` type for Request/Response
+
+4. **EFA Connection State**
+   - CONNREQ/CONNRESP handshake never completes
+   - Progress Thread may not be polling control messages
+   - First RDMA operation (READ/WRITE) triggers connection but times out
+
+**Conclusion**: **NIXL Request/Response protocol implementation is incomplete at multiple layers**. Both NIXL_READ and NIXL_WRITE operations fail because:
+- Control message infrastructure is declared but not linked properly
+- Receive path cannot process control messages
+- EFA connection establishment does not complete
+
+---
+
+### vLLM Success Pattern (Hypothesis)
+
+If vLLM disaggregated inference works on EFA, it likely uses:
+
+1. **Different transfer mechanism**: Not NIXL Request/Response
+2. **Pre-established connections**: Connections warmed up during initialization
+3. **Alternative protocol**: Direct RDMA operations without control messages
+4. **UCX backend**: Using UCX instead of libfabric for EFA
+
+Further investigation of vLLM's actual EFA usage required.
+
+---
+
+**Status**: NIXL REQUEST/RESPONSE PROTOCOL NOT USABLE IN CURRENT STATE

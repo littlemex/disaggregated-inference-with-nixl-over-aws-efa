@@ -1,13 +1,30 @@
 # Phase 3 Group 1 - g7e EFA vs TCP 性能比較
 
-## [BREAKTHROUGH] genNotif Root Cause Identified (2026-03-07)
+## [INVESTIGATION] NIXL Request/Response Protocol Issues (2026-03-07)
 
-**Status**: ROOT CAUSE IDENTIFIED + SOLUTION IMPLEMENTED
+**Status**: PROTOCOL IMPLEMENTATION INCOMPLETE - NOT USABLE
 
-3 つの Opus 4.6 並列調査により、NIXL Request/Response プロトコル失敗の根本原因を特定：
-- **問題**: genNotif() fi_senddata() が EFA 接続確立前に実行される
-- **解決策**: vLLM パターン採用 - descriptor list を TCP/ZMQ で交換、notification は転送完了のみ
-- **詳細**: [INVESTIGATION_BREAKTHROUGH_2026-03-07.md](./INVESTIGATION_BREAKTHROUGH_2026-03-07.md)
+3 つの Opus 4.6 並列調査 + 検証テストにより、複数層にわたる実装不備を発見：
+
+### 発見された問題
+
+1. **genNotif() 問題**: fi_senddata() が EFA 接続確立前に実行される
+2. **Control message infrastructure**: ヘッダー宣言が不完全（.cpp にあるが .h にない）
+3. **Receive path 未実装**: `processRecvCompletion()` が Control message を処理できない
+4. **Message type 不足**: `ControlMessageType` enum に CONTROL_MESSAGE が未定義
+5. **RDMA transfer 失敗**: NIXL_READ/NIXL_WRITE の両方がタイムアウト
+
+### 試行したアプローチ
+
+- [NG] vLLM-style TCP pattern (descriptor list via ZMQ)
+- [NG] TCP Control Channel pattern (RDMA WRITE)
+- 両方とも RDMA layer でタイムアウト
+
+### 結論
+
+NIXL Request/Response protocol は現在使用不可能。実装が複数層で未完了。
+
+**詳細**: [INVESTIGATION_BREAKTHROUGH_2026-03-07.md](./INVESTIGATION_BREAKTHROUGH_2026-03-07.md)
 
 ---
 
