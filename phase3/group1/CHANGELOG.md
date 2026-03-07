@@ -1,6 +1,87 @@
 # Changelog - Phase 3 NIXL/EFA Investigation
 
 All notable changes to Phase 3 investigation will be documented in this file.
+## [2026-03-07 19:50-20:05] - vLLM v0.17.0 DI 実装調査と engine_id 問題解決
+
+### Added
+
+- **共通 engine_id での起動スクリプト**
+  - `start_producer_fixed.sh`: engine_id `phase3-nixl-efa-di-20260307` 指定
+  - `start_consumer_corrected.sh`: engine_id + kv_ip 自ノード IP 指定
+  - S3 にデプロイ済み
+
+### Changed
+
+- **kv_transfer_config に engine_id を明示的に指定**
+  - Producer/Consumer 両方に `"engine_id":"phase3-nixl-efa-di-20260307"` 追加
+  - ランダム UUID 生成を回避
+
+- **Consumer の kv_ip を自ノードの IP に修正**
+  - 誤: `"kv_ip":"172.31.2.221"` (Producer の IP)
+  - 正: `"kv_ip":"172.31.10.117"` (Consumer 自身の IP)
+
+- **VLLM_NIXL_SIDE_CHANNEL_HOST を各ノードの自 IP に設定**
+  - Producer: `172.31.2.221`
+  - Consumer: `172.31.10.117`
+
+### Discovered
+
+- **vLLM v0.17.0 の engine_id ランダム生成問題**
+  - `KVTransferConfig.__post_init__()` で engine_id が None の場合、`uuid.uuid4()` を生成
+  - Producer と Consumer で異なる engine_id を持つと NIXL handshake が失敗
+  - エラー: "Remote NIXL agent engine ID mismatch"
+
+- **NIXL handshake プロトコルの詳細**
+  - Producer: NixlAgentMetadata に engine_id を含めて ZMQ 経由で送信
+  - Consumer: 受信した metadata.engine_id と expected_engine_id を比較
+  - expected_engine_id は kv_transfer_params の remote_engine_id から取得
+
+- **kv_ip の正しい使い方**
+  - kv_ip: 自ノードの IP（ZMQ ソケットを bind するため）
+  - remote_host: kv_transfer_params で Producer から Consumer に渡される
+
+- **GPU メモリ占有問題**
+  - 古い Worker プロセスが GPU メモリを占有し続ける（各 GPU で ~90GB）
+  - ValueError: Free memory less than desired GPU memory utilization
+  - 解決: `kill -9` で強制終了してから再起動
+
+### Fixed
+
+- [OK] NIXL handshake failure の根本原因を特定
+- [OK] engine_id を共通値で設定して Producer/Consumer 再起動
+- [OK] Consumer の kv_ip を自ノードの IP に修正
+- [OK] GPU メモリをクリーンアップ
+
+### Status
+
+- [OK] Producer: Running (PID 16075), engine_id `phase3-nixl-efa-di-20260307`
+- [OK] Consumer: Running (PID 10004), engine_id `phase3-nixl-efa-di-20260307`
+- [OK] NIXL 初期化成功（EFA devices, Data/Control Rails 作成）
+- [TODO] Proxy Server 再起動
+- [TODO] Disaggregated Inference テスト実行
+
+### Investigation Details
+
+**Explore Agent 調査レポート** (agent ID: `aea6f6fbce16d4cb1`):
+- vLLM v0.17.0 の NixlConnector 実装を詳細調査
+- engine_id の生成メカニズムを特定
+- kv_ip と kv_port の使い方を解明
+- NIXL handshake プロトコルの各ステップを追跡
+
+**調査ファイル**:
+- `vllm/config/kv_transfer.py`: KVTransferConfig クラス
+- `vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py`: _nixl_handshake() メソッド
+- `vllm/entrypoints/openai/api_server.py`: API サーバー実装
+
+### Next Steps
+
+1. Proxy Server の起動確認
+2. Disaggregated Inference テスト実行
+3. NIXL handshake 成功の確認（engine_id mismatch エラー解消）
+4. KV 転送の実際の動作確認
+
+---
+
 
 ## [2026-03-07 19:20-19:30] - NIXL Handshake Failure Investigation
 
