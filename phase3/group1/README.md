@@ -1,5 +1,16 @@
 # Phase 3 Group 1 - g7e EFA vs TCP 性能比較
 
+## [BREAKTHROUGH] genNotif Root Cause Identified (2026-03-07)
+
+**Status**: ROOT CAUSE IDENTIFIED + SOLUTION IMPLEMENTED
+
+3 つの Opus 4.6 並列調査により、NIXL Request/Response プロトコル失敗の根本原因を特定：
+- **問題**: genNotif() fi_senddata() が EFA 接続確立前に実行される
+- **解決策**: vLLM パターン採用 - descriptor list を TCP/ZMQ で交換、notification は転送完了のみ
+- **詳細**: [INVESTIGATION_BREAKTHROUGH_2026-03-07.md](./INVESTIGATION_BREAKTHROUGH_2026-03-07.md)
+
+---
+
 ## 目的
 
 g7e.12xlarge (Blackwell RTX PRO 6000) 上で EFA (UCX+SRD) と TCP の KV-Cache 転送性能を比較。
