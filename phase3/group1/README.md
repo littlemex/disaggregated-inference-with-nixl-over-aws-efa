@@ -1,30 +1,46 @@
 # Phase 3 Group 1 - g7e EFA vs TCP 性能比較
 
-## [INVESTIGATION] NIXL Request/Response Protocol Issues (2026-03-07)
+## [INVESTIGATION] EFA two-sided messaging 実装 (2026-03-07)
 
-**Status**: PROTOCOL IMPLEMENTATION INCOMPLETE - NOT USABLE
+**Status**: 実装方針確定、実装準備中
 
-3 つの Opus 4.6 並列調査 + 検証テストにより、複数層にわたる実装不備を発見：
+### 背景
 
-### 発見された問題
+Phase 3 では EFA 上での KV-Cache 転送を実現するため、以下の問題に直面：
 
-1. **genNotif() 問題**: fi_senddata() が EFA 接続確立前に実行される
-2. **Control message infrastructure**: ヘッダー宣言が不完全（.cpp にあるが .h にない）
-3. **Receive path 未実装**: `processRecvCompletion()` が Control message を処理できない
-4. **Message type 不足**: `ControlMessageType` enum に CONTROL_MESSAGE が未定義
-5. **RDMA transfer 失敗**: NIXL_READ/NIXL_WRITE の両方がタイムアウト
+1. **fi_read (one-sided RDMA Read) の失敗**:
+   - LIBFABRIC backend で `fi_read()` が `-EAGAIN` を返し続けて abort()
+   - Phase 2 (g6e) と Phase 3 (g7e) で共通の問題
 
-### 試行したアプローチ
+2. **UCX SRD の失敗**:
+   - `vendor_err 0xf` (PUT_SHORT 未実装)
 
-- [NG] vLLM-style TCP pattern (descriptor list via ZMQ)
-- [NG] TCP Control Channel pattern (RDMA WRITE)
-- 両方とも RDMA layer でタイムアウト
+### 意思決定: two-sided messaging への移行
 
-### 結論
+**方針**:
+- EFA の FI_RMA (one-sided RDMA Read) サポートが不十分
+- **LIBFABRIC backend を two-sided messaging (FI_MSG) に変更**
+- Request/Response 協調プロトコルを実装
 
-NIXL Request/Response protocol は現在使用不可能。実装が複数層で未完了。
+### 調査結果
 
-**詳細**: [INVESTIGATION_BREAKTHROUGH_2026-03-07.md](./INVESTIGATION_BREAKTHROUGH_2026-03-07.md)
+Custom commit `39f64ea` (Request/Response protocol) の分析:
+- 目的: two-sided messaging の協調プロトコル実装
+- 状態: **実装が不完全**
+- 必要な修正:
+  1. ヘッダーファイルへの宣言追加
+  2. Receive path への Control message ハンドリング実装
+  3. Message type enum の補完
+
+### 次のステップ
+
+1. Custom commit 39f64ea の実装を完成
+2. g7e.12xlarge で two-sided messaging をテスト
+3. 性能測定 (L2-EFA vs L3-TCP)
+
+**詳細**:
+- [INVESTIGATION_BREAKTHROUGH_2026-03-07.md](./INVESTIGATION_BREAKTHROUGH_2026-03-07.md)
+- [INVESTIGATION_SUMMARY_2026-03-07.md](./INVESTIGATION_SUMMARY_2026-03-07.md)
 
 ---
 

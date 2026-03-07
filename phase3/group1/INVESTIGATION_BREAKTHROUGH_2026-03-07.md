@@ -435,3 +435,98 @@ Further investigation of vLLM's actual EFA usage required.
 ---
 
 **Status**: NIXL REQUEST/RESPONSE PROTOCOL NOT USABLE IN CURRENT STATE
+
+---
+
+## 追加調査結果 (2026-03-07 夕方)
+
+### 発見 5: upstream NIXL との比較
+
+**重要な発見**: Custom commit 39f64ea は **local fork 特有の実装**であり、upstream NIXL には存在しない。
+
+#### upstream NIXL の実装
+
+- **Location**: https://github.com/ai-dynamo/nixl (commit ae80d8d)
+- **LIBFABRIC backend**: one-sided RDMA 前提
+  - `libfabric_rail_manager.cpp:415-421` で `fi_read()` を直接呼び出し
+  - Producer 側は何もしない（one-sided RDMA の特性）
+- **UCX backend**: one-sided RDMA 使用
+  - vLLM は UCX backend で動作している（PR #1386 で検証済み）
+
+#### Custom commit 39f64ea の位置づけ
+
+- **目的**: EFA の FI_RMA 不足に対応するため two-sided messaging に変更
+- **内容**: Request/Response 協調プロトコルの実装
+- **状態**: 実装が不完全（3 層にわたる不備あり）
+- **差分**: 7 ファイル、374 行の追加
+
+### 発見 6: UCX backend は使用しない
+
+**重要な確認**:
+
+1. **vLLM の UCX 使用について**:
+   - vLLM は UCX backend を使用している
+   - UCX は one-sided RDMA をサポート
+   - EFA 上で動作している（ただし PUT_SHORT 問題あり）
+
+2. **Phase 3 の方針**:
+   - **LIBFABRIC + EFA** で動作させることが目標
+   - UCX backend に切り替えるのではなく、LIBFABRIC を two-sided に対応させる
+   - 理由: EFA の FI_RMA サポートが不十分
+
+3. **実装方針の確認**:
+   - LIBFABRIC backend を two-sided messaging (FI_MSG) に変更
+   - Custom commit 39f64ea を完成させる
+   - Request/Response 協調プロトコルを正しく実装
+
+### 今後の作業方針
+
+#### 実装すべきこと
+
+1. **ヘッダーファイルの補完**:
+   ```cpp
+   // libfabric_backend.h に追加
+   nixl_status_t sendControlMessage(...);
+   void handleControlMessage(...);
+   struct ProducerTransferContext { ... };
+   ```
+
+2. **Receive path の実装**:
+   ```cpp
+   // libfabric_rail.cpp の processRecvCompletion() を修正
+   if (msg_type == NIXL_LIBFABRIC_MSG_CONTROL_REQUEST) {
+       // READ_REQUEST/WRITE_REQUEST をハンドリング
+       backend->handleControlMessage(...);
+   }
+   ```
+
+3. **Message type enum の追加**:
+   ```cpp
+   enum ControlMessageType {
+       NOTIFICATION = 2,
+       CONTROL_MESSAGE = 3  // 追加
+   };
+   ```
+
+#### 検証手順
+
+1. Custom commit 39f64ea を完全実装
+2. g7e.12xlarge 2 台で two-sided messaging をテスト
+3. EFA 上での動作確認
+4. 性能測定 (L2-EFA vs L3-TCP)
+
+### 結論
+
+**Custom commit 39f64ea は方向性として正しい**:
+- EFA の FI_RMA 不足に対する適切な対応
+- two-sided messaging への変更は必要
+- 実装を完成させれば動作する見込み
+
+**UCX backend は使用しない**:
+- Phase 3 の目標は LIBFABRIC + EFA
+- UCX に切り替えるのではなく、LIBFABRIC を修正する
+
+**次のステップ**:
+- Custom commit 39f64ea の実装を完成
+- two-sided messaging の動作確認
+- 性能測定の実施

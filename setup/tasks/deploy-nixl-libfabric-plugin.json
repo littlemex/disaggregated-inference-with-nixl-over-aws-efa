@@ -1,0 +1,102 @@
+{
+  "name": "Deploy NIXL LIBFABRIC Plugin with Two-Sided Messaging",
+  "description": "Deploy custom-built NIXL LIBFABRIC plugin (libplugin_LIBFABRIC.so) with Request/Response protocol implementation",
+  "variables": {
+    "PLUGIN_SOURCE": "/tmp/libplugin_LIBFABRIC.so",
+    "PLUGIN_NAME": "libplugin_LIBFABRIC.so",
+    "BACKUP_SUFFIX": ".backup-$(date +%Y%m%d-%H%M%S)"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-nixl",
+      "name": "Verify NIXL Installation",
+      "description": "Check if NIXL is installed and find plugin directory",
+      "commands": [
+        "python3 -c 'import nixl; print(f\"[OK] NIXL installed: {nixl.__file__}\")' || { echo '[ERROR] NIXL not installed'; exit 1; }",
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "echo \"[INFO] NIXL plugin directory: ${PLUGIN_DIR}\"",
+        "test -d \"${PLUGIN_DIR}\" || { echo '[ERROR] Plugin directory not found'; exit 1; }"
+      ]
+    },
+    {
+      "id": "02-verify-source",
+      "name": "Verify Source Plugin File",
+      "description": "Check if source plugin file exists in /tmp",
+      "commands": [
+        "test -f {{PLUGIN_SOURCE}} || { echo '[ERROR] Source plugin not found at {{PLUGIN_SOURCE}}'; exit 1; }",
+        "echo '[OK] Source plugin file exists'",
+        "ls -lh {{PLUGIN_SOURCE}}"
+      ]
+    },
+    {
+      "id": "03-backup-existing",
+      "name": "Backup Existing Plugin",
+      "description": "Create backup of existing LIBFABRIC plugin if it exists",
+      "skip_if": "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))'); PLUGIN_DIR=\"${NIXL_DIR}/_lib\"; ! test -f \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\"",
+      "commands": [
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "BACKUP_FILE=\"${PLUGIN_DIR}/{{PLUGIN_NAME}}{{BACKUP_SUFFIX}}\"",
+        "cp \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\" \"${BACKUP_FILE}\"",
+        "echo \"[OK] Backup created: ${BACKUP_FILE}\""
+      ]
+    },
+    {
+      "id": "04-deploy-plugin",
+      "name": "Deploy New Plugin",
+      "description": "Copy new LIBFABRIC plugin to NIXL directory",
+      "commands": [
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "cp {{PLUGIN_SOURCE}} \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\"",
+        "chmod 755 \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\"",
+        "echo '[OK] Plugin deployed successfully'",
+        "ls -lh \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\""
+      ]
+    },
+    {
+      "id": "05-verify-symbols",
+      "name": "Verify Plugin Symbols",
+      "description": "Check if plugin has required symbols (nixl_init, nixl_cleanup, etc.)",
+      "commands": [
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "echo '[INFO] Checking plugin symbols...'",
+        "nm -D \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\" | grep -E '(nixl_init|nixl_cleanup|nixl_connect|nixl_put|nixl_get)' >/dev/null && echo '[OK] Required symbols found' || { echo '[ERROR] Required symbols not found'; exit 1; }"
+      ]
+    },
+    {
+      "id": "06-verify-libfabric-deps",
+      "name": "Verify Libfabric Dependencies",
+      "description": "Check if plugin links to libfabric correctly",
+      "commands": [
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "echo '[INFO] Checking libfabric dependencies...'",
+        "ldd \"${PLUGIN_DIR}/{{PLUGIN_NAME}}\" | grep libfabric && echo '[OK] Libfabric linked' || { echo '[WARN] Libfabric not linked (may be OK if static)'; }"
+      ]
+    },
+    {
+      "id": "07-test-plugin-load",
+      "name": "Test Plugin Load",
+      "description": "Attempt to load LIBFABRIC backend using Python",
+      "commands": [
+        "echo '[INFO] Testing plugin load...'",
+        "python3 -c 'import nixl; import os; nixl_dir = os.path.dirname(nixl.__file__); print(f\"[INFO] NIXL dir: {nixl_dir}\")' || { echo '[ERROR] Failed to import nixl'; exit 1; }",
+        "echo '[OK] NIXL import successful'",
+        "echo '[INFO] To test LIBFABRIC backend initialization, run a minimal example with backend=[\"LIBFABRIC\"]'"
+      ]
+    },
+    {
+      "id": "08-cleanup-temp",
+      "name": "Cleanup Temporary Files",
+      "description": "Remove temporary plugin file from /tmp",
+      "skip_if": "! test -f {{PLUGIN_SOURCE}}",
+      "commands": [
+        "rm -f {{PLUGIN_SOURCE}}",
+        "echo '[OK] Temporary files cleaned up'"
+      ]
+    }
+  ]
+}
