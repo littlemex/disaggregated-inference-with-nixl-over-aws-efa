@@ -2,6 +2,57 @@
 
 All notable changes to Phase 3 investigation will be documented in this file.
 
+## [2026-03-07 19:20-19:30] - NIXL Handshake Failure Investigation
+
+### Added
+
+- **Consumer restart script** (`start_consumer_fixed.sh`)
+  - Proper kv_ip configuration with Producer private IP (172.31.2.221)
+  - Environment variables for NIXL LIBFABRIC backend
+  - Deployed to S3 for remote execution
+
+- **DI test request script** (`test_di_request.sh`)
+  - Proxy Server 経由で Disaggregated Inference をテスト
+  - Prefill → Decode フローの検証用
+
+### Changed
+
+- **Consumer kv_transfer_config**: kv_ip を Producer のプライベート IP に変更
+- **README.md**: 次のステップを「NIXL Handshake Failure 解決」に更新
+- **WORK_LOG_2026-03-07.md**: Section 7 追加（DI 動作検証）
+
+### Discovered
+
+- **NIXL Handshake Failure**: engine_id mismatch エラー
+  - Consumer engine_id: `9690d2d6-a66f-4fd8-905c-fd03dce5655f`
+  - Producer engine_id: `495b4444-8935-4ada-a9d7-fe915b9c9595`
+  - Consumer が Producer に接続時、Producer から Consumer 自身の engine_id が返却
+  - RuntimeError: "Remote NIXL agent engine ID mismatch"
+
+- **考えられる原因**:
+  1. vLLM v0.17.0 DI 設定が不完全
+  2. Proxy Server の kv_transfer_params に engine_id 指定が必要
+  3. Producer 側も kv_ip 設定が必要（現在は 127.0.0.1）
+  4. NIXL handshake protocol の仕様誤解
+
+### Status
+
+- [OK] Consumer vLLM v0.17.0 起動成功（ubuntu ユーザー）
+- [OK] NIXL LIBFABRIC 初期化成功（EFA devices, Rails 作成）
+- [OK] Proxy Server 動作確認
+- [BLOCKED] DI 実行時に NIXL handshake failure
+
+### Next Steps
+
+1. vLLM v0.17.0 DI 設定の再確認
+2. Proxy Server の kv_transfer_params 修正
+3. Producer の kv_ip 設定確認
+4. NIXL handshake protocol の詳細調査
+
+---
+
+All notable changes to Phase 3 investigation will be documented in this file.
+
 ## [2026-03-07] - INVESTIGATION: NIXL Request/Response Protocol Issues
 
 ### Added
