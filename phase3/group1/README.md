@@ -42,11 +42,14 @@ g7e の新しい EFA ドライバ/UCX 環境で再テスト。
 |------|-----|
 | Region | us-west-2 |
 | AZ | us-west-2c |
-| Node1 Instance ID | i-050ac7e7a9986ccc7 |
+| Node1 Instance ID | i-050ac7e7a9986ccc7 (STOPPED) |
 | Node1 Private IP | 172.31.2.221 |
-| Node2 Instance ID | i-0634bbcbb9d65d4e3 |
+| Node2 Instance ID | i-0634bbcbb9d65d4e3 (STOPPED) |
 | Node2 Private IP | 172.31.10.117 |
+| Instance Type | g7e.12xlarge (停止中) |
 | S3 Bucket | phase3-nixl-efa-dev-west-2-scriptsbucket40feb4b1-ougyvcmrbyjj |
+
+**注意**: 今後の検証は **g7e.2xlarge** を使用すること（コスト削減のため）
 
 ## 注意事項
 
