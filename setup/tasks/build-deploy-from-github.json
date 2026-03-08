@@ -1,0 +1,265 @@
+{
+  "name": "Build and Deploy NIXL LIBFABRIC Plugin from GitHub",
+  "description": "Complete automated workflow: clone littlemex/nixl from GitHub, build LIBFABRIC plugin, upload to S3, and deploy to EC2 nodes. Fully reproducible on any machine with git, ninja, and aws CLI.",
+  "environment": {
+    "NIXL_REPO": "git@github.com:littlemex/nixl.git",
+    "NIXL_BRANCH": "main",
+    "NIXL_CLONE_DIR": "/tmp/nixl-build",
+    "BUILD_SUBDIR": "build",
+    "PLUGIN_RELATIVE_PATH": "src/plugins/libfabric/libplugin_LIBFABRIC.so",
+    "S3_BUCKET": "phase3-nixl-efa-dev-west-2-scriptsbucket40feb4b1-ougyvcmrbyjj",
+    "S3_PLUGIN_KEY": "plugins/libplugin_LIBFABRIC.so",
+    "AWS_REGION": "us-west-2",
+    "SSH_KEY": "/home/coder/.ssh/phase3_key",
+    "NODE1_PUBLIC_IP": "44.247.215.228",
+    "NODE2_PUBLIC_IP": "34.217.117.205",
+    "REMOTE_USER": "ubuntu",
+    "REMOTE_PLUGIN_DIR": "/home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins",
+    "REMOTE_PLUGIN_FILE": "libplugin_LIBFABRIC.so"
+  },
+  "tasks": [
+    {
+      "id": "01-check-prerequisites",
+      "name": "Check local prerequisites (git, ninja, g++, meson, aws)",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking prerequisites...'",
+        "command -v git >/dev/null 2>&1 || { echo '[ERROR] git not found'; exit 1; }",
+        "command -v ninja >/dev/null 2>&1 || { echo '[ERROR] ninja not found. Install: apt-get install ninja-build'; exit 1; }",
+        "command -v g++ >/dev/null 2>&1 || { echo '[ERROR] g++ not found. Install: apt-get install build-essential'; exit 1; }",
+        "command -v meson >/dev/null 2>&1 || { echo '[ERROR] meson not found. Install: pip install meson'; exit 1; }",
+        "command -v aws >/dev/null 2>&1 || { echo '[ERROR] aws CLI not found'; exit 1; }",
+        "echo \"[OK] git: $(git --version | head -1)\"",
+        "echo \"[OK] ninja: $(ninja --version)\"",
+        "echo \"[OK] g++: $(g++ --version | head -1)\"",
+        "echo \"[OK] meson: $(meson --version)\"",
+        "echo \"[OK] aws: $(aws --version | head -1)\"",
+        "echo '[OK] All prerequisites satisfied'"
+      ]
+    },
+    {
+      "id": "02-clone-or-update-nixl",
+      "name": "Clone NIXL from GitHub or update if already exists",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Setting up NIXL source...'",
+        "if [ -d \"${NIXL_CLONE_DIR}/.git\" ]; then echo '[INFO] NIXL repository exists, updating...'; cd \"${NIXL_CLONE_DIR}\" && git fetch origin && git checkout ${NIXL_BRANCH} && git pull origin ${NIXL_BRANCH} && echo '[OK] Repository updated'; else echo '[INFO] Cloning NIXL from ${NIXL_REPO}...'; rm -rf \"${NIXL_CLONE_DIR}\" && git clone \"${NIXL_REPO}\" \"${NIXL_CLONE_DIR}\" && cd \"${NIXL_CLONE_DIR}\" && git checkout ${NIXL_BRANCH} && echo '[OK] Repository cloned'; fi",
+        "cd \"${NIXL_CLONE_DIR}\" && git log --oneline -1",
+        "echo \"[OK] NIXL source ready at ${NIXL_CLONE_DIR}\""
+      ]
+    },
+    {
+      "id": "03-verify-backend-fix",
+      "name": "Verify LIBFABRIC backend fix is present in source",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying backend fix in source code...'",
+        "PLUGIN_SRC=\"${NIXL_CLONE_DIR}/src/plugins/libfabric\"",
+        "echo '[CHECK] conn_info_ member variable...'",
+        "grep -n 'std::string conn_info_' \"${PLUGIN_SRC}/libfabric_backend.h\" || { echo '[ERROR] conn_info_ member not found'; exit 1; }",
+        "echo '[CHECK] getConnInfo() returns cached conn_info_...'",
+        "grep -A3 'getConnInfo.*const' \"${PLUGIN_SRC}/libfabric_backend.cpp\" | grep -q 'str = conn_info_' || { echo '[ERROR] cached getConnInfo not found'; exit 1; }",
+        "echo '[CHECK] Constructor serializes conn_info_...'",
+        "grep -q 'serializeConnectionInfo.*conn_info_' \"${PLUGIN_SRC}/libfabric_backend.cpp\" || { echo '[ERROR] constructor serialization not found'; exit 1; }",
+        "echo '[OK] Backend fix verified in source'"
+      ]
+    },
+    {
+      "id": "04-setup-meson-build",
+      "name": "Setup meson build directory (idempotent)",
+      "skip_if": "test -f ${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/build.ninja",
+      "commands": [
+        "echo '[INFO] Setting up meson build...'",
+        "cd \"${NIXL_CLONE_DIR}\"",
+        "meson setup ${BUILD_SUBDIR} --prefix=/usr/local 2>&1 | tail -20",
+        "test -f \"${BUILD_SUBDIR}/build.ninja\" || { echo '[ERROR] meson setup failed'; exit 1; }",
+        "echo '[OK] Meson build configured'"
+      ]
+    },
+    {
+      "id": "05-build-plugin",
+      "name": "Build LIBFABRIC plugin with ninja",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Building LIBFABRIC plugin...'",
+        "cd \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}\"",
+        "ninja ${PLUGIN_RELATIVE_PATH} 2>&1 | tail -30",
+        "BUILD_EXIT=$?",
+        "if [ $BUILD_EXIT -ne 0 ]; then echo '[ERROR] Build failed'; exit 1; fi",
+        "echo '[OK] Build completed successfully'"
+      ]
+    },
+    {
+      "id": "06-verify-build-artifact",
+      "name": "Verify build artifact (size, timestamp, ELF format)",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying build artifact...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "test -f \"${PLUGIN_PATH}\" || { echo '[ERROR] Plugin not found at ${PLUGIN_PATH}'; exit 1; }",
+        "SO_SIZE=$(stat -c '%s' \"${PLUGIN_PATH}\")",
+        "SO_SIZE_KB=$((SO_SIZE / 1024))",
+        "SO_TIMESTAMP=$(stat -c '%y' \"${PLUGIN_PATH}\")",
+        "SO_MD5=$(md5sum \"${PLUGIN_PATH}\" | awk '{print $1}')",
+        "echo \"[OK] Path:      ${PLUGIN_PATH}\"",
+        "echo \"[OK] Size:      ${SO_SIZE} bytes (${SO_SIZE_KB} KB)\"",
+        "echo \"[OK] Timestamp: ${SO_TIMESTAMP}\"",
+        "echo \"[OK] MD5:       ${SO_MD5}\"",
+        "file \"${PLUGIN_PATH}\" | grep -q 'ELF.*shared object' || { echo '[ERROR] Not a valid ELF shared object'; exit 1; }",
+        "echo \"[OK] Format:    $(file \"${PLUGIN_PATH}\" | sed 's/.*: //')\"",
+        "if [ $SO_SIZE_KB -lt 100 ]; then echo '[WARN] Artifact unusually small (<100 KB)'; fi",
+        "if [ $SO_SIZE_KB -gt 10000 ]; then echo '[WARN] Artifact unusually large (>10 MB)'; fi",
+        "echo '[OK] Artifact verification passed'"
+      ]
+    },
+    {
+      "id": "07-verify-symbols",
+      "name": "Verify exported symbols",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking exported symbols...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "SYMBOL_COUNT=$(nm -D \"${PLUGIN_PATH}\" 2>/dev/null | grep -c ' T ' || echo 0)",
+        "echo \"[OK] Total exported (T) symbols: ${SYMBOL_COUNT}\"",
+        "nm \"${PLUGIN_PATH}\" 2>/dev/null | grep -c 'nixlLibfabricEngine' | xargs -I{} echo '[OK] nixlLibfabricEngine references: {}'",
+        "echo '[OK] Symbol verification complete'"
+      ]
+    },
+    {
+      "id": "08-upload-to-s3",
+      "name": "Upload plugin to S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Uploading plugin to S3...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "aws s3 cp \"${PLUGIN_PATH}\" \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION}",
+        "echo '[INFO] Verifying S3 upload...'",
+        "aws s3 ls \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION} || { echo '[ERROR] S3 upload verification failed'; exit 1; }",
+        "S3_SIZE=$(aws s3api head-object --bucket \"${S3_BUCKET}\" --key \"${S3_PLUGIN_KEY}\" --region ${AWS_REGION} --query ContentLength --output text)",
+        "LOCAL_SIZE=$(stat -c%s \"${PLUGIN_PATH}\")",
+        "echo \"[INFO] S3 size: ${S3_SIZE} bytes, Local size: ${LOCAL_SIZE} bytes\"",
+        "if [ \"${S3_SIZE}\" -eq \"${LOCAL_SIZE}\" ]; then echo '[OK] Size verification passed'; else echo '[ERROR] Size mismatch'; exit 1; fi",
+        "echo \"[OK] Plugin uploaded to s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\""
+      ]
+    },
+    {
+      "id": "09-check-node-connectivity",
+      "name": "Verify SSH connectivity to both nodes",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Testing SSH connectivity...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${REMOTE_USER}@${NODE1_PUBLIC_IP} 'echo [OK] Node1 reachable' || { echo '[ERROR] Cannot SSH to Node1'; exit 1; }",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${REMOTE_USER}@${NODE2_PUBLIC_IP} 'echo [OK] Node2 reachable' || { echo '[ERROR] Cannot SSH to Node2'; exit 1; }",
+        "echo '[OK] Both nodes are reachable'"
+      ]
+    },
+    {
+      "id": "10-deploy-to-node1",
+      "name": "Deploy plugin to Node1 from S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Deploying plugin to Node1 (${NODE1_PUBLIC_IP})...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no ${REMOTE_USER}@${NODE1_PUBLIC_IP} bash -s << 'EOSSH'",
+        "set -e",
+        "echo '[INFO] Downloading plugin from S3...'",
+        "aws s3 cp s3://${S3_BUCKET}/${S3_PLUGIN_KEY} /tmp/${REMOTE_PLUGIN_FILE} --region ${AWS_REGION} --quiet",
+        "echo '[INFO] Backing up existing plugin...'",
+        "if [ ! -f \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}.original\" ]; then",
+        "  cp \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\" \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}.original\" 2>/dev/null || echo '[INFO] No existing plugin to backup'",
+        "fi",
+        "echo '[INFO] Installing plugin...'",
+        "cp /tmp/${REMOTE_PLUGIN_FILE} \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "chmod 755 \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "echo '[INFO] Verifying installation...'",
+        "ls -lh \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "python3 -c 'from nixl._api import nixl_agent, nixl_agent_config; import uuid; cfg = nixl_agent_config(); agent = nixl_agent(str(uuid.uuid4()), cfg); plugins = agent.get_plugin_list(); assert \"LIBFABRIC\" in plugins' || { echo '[ERROR] NIXL cannot load LIBFABRIC plugin'; exit 1; }",
+        "echo '[OK] Plugin deployed to Node1'",
+        "EOSSH",
+        "echo '[OK] Node1 deployment complete'"
+      ]
+    },
+    {
+      "id": "11-deploy-to-node2",
+      "name": "Deploy plugin to Node2 from S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Deploying plugin to Node2 (${NODE2_PUBLIC_IP})...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no ${REMOTE_USER}@${NODE2_PUBLIC_IP} bash -s << 'EOSSH'",
+        "set -e",
+        "echo '[INFO] Downloading plugin from S3...'",
+        "aws s3 cp s3://${S3_BUCKET}/${S3_PLUGIN_KEY} /tmp/${REMOTE_PLUGIN_FILE} --region ${AWS_REGION} --quiet",
+        "echo '[INFO] Backing up existing plugin...'",
+        "if [ ! -f \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}.original\" ]; then",
+        "  cp \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\" \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}.original\" 2>/dev/null || echo '[INFO] No existing plugin to backup'",
+        "fi",
+        "echo '[INFO] Installing plugin...'",
+        "cp /tmp/${REMOTE_PLUGIN_FILE} \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "chmod 755 \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "echo '[INFO] Verifying installation...'",
+        "ls -lh \"${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "python3 -c 'from nixl._api import nixl_agent, nixl_agent_config; import uuid; cfg = nixl_agent_config(); agent = nixl_agent(str(uuid.uuid4()), cfg); plugins = agent.get_plugin_list(); assert \"LIBFABRIC\" in plugins' || { echo '[ERROR] NIXL cannot load LIBFABRIC plugin'; exit 1; }",
+        "echo '[OK] Plugin deployed to Node2'",
+        "EOSSH",
+        "echo '[OK] Node2 deployment complete'"
+      ]
+    },
+    {
+      "id": "12-verify-deployment",
+      "name": "Verify deployment on both nodes",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying deployment on both nodes...'",
+        "echo '[CHECK] Node1 plugin MD5...'",
+        "NODE1_MD5=$(ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no ${REMOTE_USER}@${NODE1_PUBLIC_IP} \"md5sum ${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE} | awk '{print \\$1}'\")",
+        "echo \"  Node1 MD5: ${NODE1_MD5}\"",
+        "echo '[CHECK] Node2 plugin MD5...'",
+        "NODE2_MD5=$(ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no ${REMOTE_USER}@${NODE2_PUBLIC_IP} \"md5sum ${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE} | awk '{print \\$1}'\")",
+        "echo \"  Node2 MD5: ${NODE2_MD5}\"",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "LOCAL_MD5=$(md5sum \"${PLUGIN_PATH}\" | awk '{print $1}')",
+        "echo \"  Local MD5: ${LOCAL_MD5}\"",
+        "if [ \"${NODE1_MD5}\" = \"${LOCAL_MD5}\" ] && [ \"${NODE2_MD5}\" = \"${LOCAL_MD5}\" ]; then echo '[OK] All MD5 hashes match'; else echo '[ERROR] MD5 mismatch detected'; exit 1; fi",
+        "echo '[OK] Deployment verification passed'"
+      ]
+    },
+    {
+      "id": "13-summary",
+      "name": "Display deployment summary",
+      "skip_if": "",
+      "commands": [
+        "echo ''",
+        "echo '========================================='",
+        "echo 'NIXL LIBFABRIC Plugin Deployment Summary'",
+        "echo '========================================='",
+        "echo ''",
+        "echo 'Source:'",
+        "echo \"  Repository: ${NIXL_REPO}\"",
+        "echo \"  Branch:     ${NIXL_BRANCH}\"",
+        "echo \"  Local path: ${NIXL_CLONE_DIR}\"",
+        "cd \"${NIXL_CLONE_DIR}\" && echo \"  Commit:     $(git log --oneline -1)\"",
+        "echo ''",
+        "echo 'Build artifact:'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "echo \"  Path: ${PLUGIN_PATH}\"",
+        "echo \"  Size: $(stat -c '%s' \"${PLUGIN_PATH}\") bytes ($(( $(stat -c '%s' \"${PLUGIN_PATH}\") / 1024 )) KB)\"",
+        "echo \"  MD5:  $(md5sum \"${PLUGIN_PATH}\" | awk '{print $1}')\"",
+        "echo ''",
+        "echo 'S3 deployment:'",
+        "echo \"  Bucket: s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\"",
+        "echo \"  Region: ${AWS_REGION}\"",
+        "echo ''",
+        "echo 'Node deployment:'",
+        "echo \"  Node1: ${NODE1_PUBLIC_IP} [OK]\"",
+        "echo \"  Node2: ${NODE2_PUBLIC_IP} [OK]\"",
+        "echo \"  Plugin path: ${REMOTE_PLUGIN_DIR}/${REMOTE_PLUGIN_FILE}\"",
+        "echo ''",
+        "echo 'Next steps:'",
+        "echo '  1. Restart vLLM services on both nodes'",
+        "echo '  2. Check logs for \"Backend LIBFABRIC was instantiated\"'",
+        "echo '  3. Test API endpoint'",
+        "echo ''",
+        "echo '[SUCCESS] Deployment complete!'"
+      ]
+    }
+  ]
+}
