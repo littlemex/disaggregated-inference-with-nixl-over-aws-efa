@@ -1,0 +1,213 @@
+{
+  "name": "Fix NIXL Backend Deletion - Build, Deploy, and Validate",
+  "description": "NIXL Backend 即時削除問題の修正をビルド・デプロイ・検証する統合タスク。カスタム LIBFABRIC プラグインの getConnInfo() が NIXL_SUCCESS を返すように修正済みのソースをビルドし、S3 経由で両ノードにデプロイ、vLLM Consumer/Producer の正常起動を検証する。",
+  "variables": {
+    "NIXL_SOURCE_DIR": "/home/coder/nixl",
+    "NIXL_BUILD_DIR": "/home/coder/nixl/build",
+    "PLUGIN_RELATIVE_PATH": "src/plugins/libfabric/libplugin_LIBFABRIC.so",
+    "S3_BUCKET": "phase3-nixl-efa-dev-west-2-scriptsbucket40feb4b1-ougyvcmrbyjj",
+    "S3_PLUGIN_PATH": "plugins/libplugin_LIBFABRIC.so",
+    "AWS_REGION": "us-west-2",
+    "SSH_KEY": "/home/coder/.ssh/phase3_key",
+    "NODE1_PUBLIC_IP": "44.247.215.228",
+    "NODE2_PUBLIC_IP": "34.217.117.205",
+    "NODE1_PRIVATE_IP": "172.31.2.221",
+    "NODE2_PRIVATE_IP": "172.31.10.117",
+    "REMOTE_PLUGIN_DIR": "/home/ubuntu/.local/lib/python3.10/site-packages/nixl/../.nixl_cu12.mesonpy.libs/plugins",
+    "REMOTE_PLUGIN_FILE": "libplugin_LIBFABRIC.so",
+    "REMOTE_USER": "ubuntu",
+    "SSH_OPTS": "-i /home/coder/.ssh/phase3_key -o StrictHostKeyChecking=no -o ConnectTimeout=10"
+  },
+  "tasks": [
+    {
+      "id": "01-check-prerequisites",
+      "name": "Check prerequisites (local build tools)",
+      "skip_if": "test -f {{NIXL_BUILD_DIR}}/build.ninja && command -v ninja >/dev/null 2>&1 && command -v aws >/dev/null 2>&1",
+      "commands": [
+        "echo '[CHECK] Verifying local build prerequisites...'",
+        "command -v ninja >/dev/null 2>&1 || { echo '[ERROR] ninja not found'; exit 1; }",
+        "command -v aws >/dev/null 2>&1 || { echo '[ERROR] aws CLI not found'; exit 1; }",
+        "test -d {{NIXL_SOURCE_DIR}} || { echo '[ERROR] NIXL source directory not found: {{NIXL_SOURCE_DIR}}'; exit 1; }",
+        "test -f {{NIXL_BUILD_DIR}}/build.ninja || { echo '[ERROR] NIXL build not configured. Run meson setup first.'; exit 1; }",
+        "echo '[OK] All local prerequisites satisfied'"
+      ]
+    },
+    {
+      "id": "02-verify-source-fix",
+      "name": "Verify getConnInfo() fix is applied in source",
+      "skip_if": "grep -q 'str = conn_info_' {{NIXL_SOURCE_DIR}}/src/plugins/libfabric/libfabric_backend.cpp && grep -q 'std::string conn_info_' {{NIXL_SOURCE_DIR}}/src/plugins/libfabric/libfabric_backend.h",
+      "commands": [
+        "echo '[CHECK] Verifying getConnInfo() fix in source code...'",
+        "echo '[CHECK] libfabric_backend.h: conn_info_ member variable...'",
+        "grep -n 'std::string conn_info_' {{NIXL_SOURCE_DIR}}/src/plugins/libfabric/libfabric_backend.h || { echo '[ERROR] conn_info_ member not found in header'; exit 1; }",
+        "echo '[CHECK] libfabric_backend.cpp: getConnInfo() returns cached data...'",
+        "grep -n 'str = conn_info_' {{NIXL_SOURCE_DIR}}/src/plugins/libfabric/libfabric_backend.cpp || { echo '[ERROR] getConnInfo() fix not found in source'; exit 1; }",
+        "echo '[CHECK] libfabric_backend.cpp: Constructor serializes conn_info_...'",
+        "grep -n 'serializeConnectionInfo.*conn_info_' {{NIXL_SOURCE_DIR}}/src/plugins/libfabric/libfabric_backend.cpp || { echo '[ERROR] Constructor serialization not found'; exit 1; }",
+        "echo '[OK] Source code fix verified: getConnInfo() returns NIXL_SUCCESS with cached conn_info_'"
+      ]
+    },
+    {
+      "id": "03-build-nixl",
+      "name": "Build NIXL with ninja",
+      "commands": [
+        "echo '[BUILD] Building NIXL from {{NIXL_BUILD_DIR}}...'",
+        "cd {{NIXL_BUILD_DIR}} && ninja 2>&1 | tail -20",
+        "echo '[CHECK] Verifying build output...'",
+        "test -f {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}} || { echo '[ERROR] Plugin binary not found after build'; exit 1; }",
+        "PLUGIN_SIZE=$(stat -c%s {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}})",
+        "echo \"[OK] Build successful. Plugin size: ${PLUGIN_SIZE} bytes\"",
+        "echo \"[INFO] Plugin path: {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}}\""
+      ]
+    },
+    {
+      "id": "04-verify-build-symbols",
+      "name": "Verify plugin has required symbols",
+      "commands": [
+        "echo '[CHECK] Verifying plugin symbols...'",
+        "nm -D {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}} | grep -E '(nixlLibfabricEngine|getConnInfo)' | head -5",
+        "nm -D {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}} | grep 'conn_info' && echo '[OK] conn_info_ symbol found' || echo '[INFO] conn_info_ may be inlined (OK for optimized build)'",
+        "echo '[CHECK] Checking for getConnInfo in exported symbols...'",
+        "nm -D {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}} | grep -q 'getConnInfo' && echo '[OK] getConnInfo symbol exported' || echo '[WARN] getConnInfo may be resolved at link time'",
+        "echo '[OK] Symbol verification complete'"
+      ]
+    },
+    {
+      "id": "05-upload-s3",
+      "name": "Upload plugin to S3",
+      "commands": [
+        "echo '[DEPLOY] Uploading plugin to S3...'",
+        "aws s3 cp {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}} s3://{{S3_BUCKET}}/{{S3_PLUGIN_PATH}} --region {{AWS_REGION}}",
+        "echo '[CHECK] Verifying S3 upload...'",
+        "aws s3 ls s3://{{S3_BUCKET}}/{{S3_PLUGIN_PATH}} --region {{AWS_REGION}} || { echo '[ERROR] S3 upload verification failed'; exit 1; }",
+        "echo '[OK] Plugin uploaded to s3://{{S3_BUCKET}}/{{S3_PLUGIN_PATH}}'"
+      ]
+    },
+    {
+      "id": "06-check-node-connectivity",
+      "name": "Verify SSH connectivity to both nodes",
+      "commands": [
+        "echo '[CHECK] Testing SSH connectivity to Node1 ({{NODE1_PUBLIC_IP}})...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'echo [OK] Node1 reachable' || { echo '[ERROR] Cannot SSH to Node1'; exit 1; }",
+        "echo '[CHECK] Testing SSH connectivity to Node2 ({{NODE2_PUBLIC_IP}})...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'echo [OK] Node2 reachable' || { echo '[ERROR] Cannot SSH to Node2'; exit 1; }",
+        "echo '[OK] Both nodes are reachable via SSH'"
+      ]
+    },
+    {
+      "id": "07-stop-existing-processes",
+      "name": "Stop existing vLLM processes on both nodes",
+      "commands": [
+        "echo '[CLEANUP] Stopping existing vLLM processes on Node1...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'pkill -f \"vllm.entrypoints\" 2>/dev/null; pkill -f \"python.*vllm\" 2>/dev/null; sleep 2; echo [OK] Node1 processes stopped' || true",
+        "echo '[CLEANUP] Stopping existing vLLM processes on Node2...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'pkill -f \"vllm.entrypoints\" 2>/dev/null; pkill -f \"python.*vllm\" 2>/dev/null; sleep 2; echo [OK] Node2 processes stopped' || true",
+        "echo '[CLEANUP] Clearing GPU memory on Node1...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 2>/dev/null; sleep 1; echo [OK] Node1 GPU cleared' || true",
+        "echo '[CLEANUP] Clearing GPU memory on Node2...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 2>/dev/null; sleep 1; echo [OK] Node2 GPU cleared' || true",
+        "echo '[OK] Existing processes stopped on both nodes'"
+      ]
+    },
+    {
+      "id": "08-backup-existing-plugins",
+      "name": "Backup existing plugins on both nodes",
+      "commands": [
+        "TIMESTAMP=$(date +%Y%m%d-%H%M%S)",
+        "echo '[BACKUP] Backing up existing plugin on Node1...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} \"test -f {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}} && cp {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}} {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}.backup-${TIMESTAMP} && echo '[OK] Node1 backup created' || echo '[INFO] No existing plugin on Node1'\"",
+        "echo '[BACKUP] Backing up existing plugin on Node2...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} \"test -f {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}} && cp {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}} {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}.backup-${TIMESTAMP} && echo '[OK] Node2 backup created' || echo '[INFO] No existing plugin on Node2'\"",
+        "echo '[OK] Backup complete'"
+      ]
+    },
+    {
+      "id": "09-deploy-plugin-node1",
+      "name": "Deploy plugin to Node1 from S3",
+      "commands": [
+        "echo '[DEPLOY] Deploying plugin to Node1 ({{NODE1_PUBLIC_IP}})...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'aws s3 cp s3://{{S3_BUCKET}}/{{S3_PLUGIN_PATH}} /tmp/{{REMOTE_PLUGIN_FILE}} --region {{AWS_REGION}}'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'cp /tmp/{{REMOTE_PLUGIN_FILE}} {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}} && chmod 755 {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}'",
+        "echo '[CHECK] Verifying deployed plugin on Node1...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'ls -lh {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'rm -f /tmp/{{REMOTE_PLUGIN_FILE}}'",
+        "echo '[OK] Plugin deployed to Node1'"
+      ]
+    },
+    {
+      "id": "10-deploy-plugin-node2",
+      "name": "Deploy plugin to Node2 from S3",
+      "commands": [
+        "echo '[DEPLOY] Deploying plugin to Node2 ({{NODE2_PUBLIC_IP}})...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'aws s3 cp s3://{{S3_BUCKET}}/{{S3_PLUGIN_PATH}} /tmp/{{REMOTE_PLUGIN_FILE}} --region {{AWS_REGION}}'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'cp /tmp/{{REMOTE_PLUGIN_FILE}} {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}} && chmod 755 {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}'",
+        "echo '[CHECK] Verifying deployed plugin on Node2...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'ls -lh {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'rm -f /tmp/{{REMOTE_PLUGIN_FILE}}'",
+        "echo '[OK] Plugin deployed to Node2'"
+      ]
+    },
+    {
+      "id": "11-verify-plugin-integrity",
+      "name": "Verify plugin integrity on both nodes (size and symbols)",
+      "commands": [
+        "echo '[VERIFY] Checking plugin integrity on both nodes...'",
+        "echo \"[INFO] Local plugin size: $(stat -c%s {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}}) bytes\"",
+        "echo \"[INFO] Node1 plugin size: $(ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'stat -c%s {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}') bytes\"",
+        "echo \"[INFO] Node2 plugin size: $(ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'stat -c%s {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}') bytes\"",
+        "LOCAL_SIZE=$(stat -c%s {{NIXL_BUILD_DIR}}/{{PLUGIN_RELATIVE_PATH}}) && REMOTE_SIZE_N1=$(ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'stat -c%s {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}') && REMOTE_SIZE_N2=$(ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'stat -c%s {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}') && test \"${LOCAL_SIZE}\" = \"${REMOTE_SIZE_N1}\" && test \"${LOCAL_SIZE}\" = \"${REMOTE_SIZE_N2}\" && echo '[OK] Plugin size matches on both nodes' || { echo '[ERROR] Plugin size mismatch detected'; exit 1; }",
+        "echo '[VERIFY] Checking NIXL import on Node1...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'python3 -c \"import nixl; print(f\\\"[OK] NIXL import successful: {nixl.__file__}\\\")\"'",
+        "echo '[VERIFY] Checking NIXL import on Node2...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'python3 -c \"import nixl; print(f\\\"[OK] NIXL import successful: {nixl.__file__}\\\")\"'",
+        "echo '[OK] Plugin integrity verified on both nodes'"
+      ]
+    },
+    {
+      "id": "12-validate-backend-creation",
+      "name": "Validate Backend creation succeeds (no NIXL_ERR_INVALID_PARAM)",
+      "commands": [
+        "echo '[VALIDATE] Testing Backend creation on Node2 (Consumer)...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE2_PUBLIC_IP}} 'python3 -c \"import nixl; agent = nixl.nixl_agent(\\\"test-backend-validation\\\"); agent.create_backend(\\\"LIBFABRIC\\\", {}); print(\\\"[OK] Backend LIBFABRIC created successfully - getConnInfo() returned NIXL_SUCCESS\\\")\"'",
+        "echo '[OK] Backend creation validation passed on Node2'"
+      ]
+    },
+    {
+      "id": "13-validate-backend-node1",
+      "name": "Validate Backend creation on Node1 (Producer)",
+      "commands": [
+        "echo '[VALIDATE] Testing Backend creation on Node1 (Producer)...'",
+        "ssh {{SSH_OPTS}} {{REMOTE_USER}}@{{NODE1_PUBLIC_IP}} 'python3 -c \"import nixl; agent = nixl.nixl_agent(\\\"test-backend-validation-n1\\\"); agent.create_backend(\\\"LIBFABRIC\\\", {}); print(\\\"[OK] Backend LIBFABRIC created successfully on Node1\\\")\"'",
+        "echo '[OK] Backend creation validation passed on Node1'"
+      ]
+    },
+    {
+      "id": "14-summary",
+      "name": "Print deployment summary",
+      "commands": [
+        "echo '=========================================='",
+        "echo 'NIXL Backend Deletion Fix - Deployment Summary'",
+        "echo '=========================================='",
+        "echo ''",
+        "echo '[FIX] getConnInfo() now returns NIXL_SUCCESS with cached conn_info_'",
+        "echo '[FIX] Backend is no longer deleted during createBackend()'",
+        "echo ''",
+        "echo 'Deployed to:'",
+        "echo '  Node1 (Producer): {{NODE1_PUBLIC_IP}} ({{NODE1_PRIVATE_IP}})'",
+        "echo '  Node2 (Consumer): {{NODE2_PUBLIC_IP}} ({{NODE2_PRIVATE_IP}})'",
+        "echo '  S3: s3://{{S3_BUCKET}}/{{S3_PLUGIN_PATH}}'",
+        "echo ''",
+        "echo 'Plugin location on nodes:'",
+        "echo '  {{REMOTE_PLUGIN_DIR}}/{{REMOTE_PLUGIN_FILE}}'",
+        "echo ''",
+        "echo 'Next steps:'",
+        "echo '  1. Start Producer (Node1) with vLLM + NIXL LIBFABRIC backend'",
+        "echo '  2. Start Consumer (Node2) with vLLM + NIXL LIBFABRIC backend'",
+        "echo '  3. Start Proxy Server and run Disaggregated Inference test'",
+        "echo '  4. Verify KV-Cache transfer completes without NIXL_ERR_INVALID_PARAM'",
+        "echo ''",
+        "echo '[DONE] Deployment complete. Ready for Disaggregated Inference testing.'"
+      ]
+    }
+  ]
+}

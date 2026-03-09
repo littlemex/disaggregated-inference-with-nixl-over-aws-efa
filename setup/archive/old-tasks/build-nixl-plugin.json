@@ -1,0 +1,95 @@
+{
+  "name": "Build NIXL Plugin from Source with conn_info_ Fix",
+  "description": "Build NIXL LIBFABRIC plugin from littlemex/nixl main branch (includes Backend deletion fix)",
+  "environment": {
+    "DEBIAN_FRONTEND": "noninteractive",
+    "NIXL_REPO": "${NIXL_REPO}",
+    "NIXL_BRANCH": "${NIXL_BRANCH}",
+    "NIXL_CLONE_DIR": "${NIXL_CLONE_DIR}",
+    "BUILD_SUBDIR": "${BUILD_SUBDIR}"
+  },
+  "tasks": [
+    {
+      "id": "01-install-build-deps",
+      "name": "Install build dependencies",
+      "skip_if": "dpkg -l | grep -q build-essential && dpkg -l | grep -q cmake && dpkg -l | grep -q libfabric-dev && dpkg -l | grep -q libhwloc-dev",
+      "commands": [
+        "echo '[INFO] Installing build dependencies...'",
+        "sudo apt-get update -qq",
+        "sudo apt-get install -y build-essential cmake ninja-build git libfabric-dev libhwloc-dev",
+        "echo '[OK] Build dependencies installed'"
+      ]
+    },
+    {
+      "id": "02-clone-nixl",
+      "name": "Clone NIXL repository",
+      "skip_if": "test -d ${NIXL_CLONE_DIR}/.git",
+      "commands": [
+        "echo '[INFO] Cloning NIXL repository...'",
+        "rm -rf ${NIXL_CLONE_DIR}",
+        "git clone --depth 1 --branch ${NIXL_BRANCH} ${NIXL_REPO} ${NIXL_CLONE_DIR}",
+        "echo '[OK] NIXL repository cloned'"
+      ]
+    },
+    {
+      "id": "03-verify-conn-info-fix",
+      "name": "Verify conn_info_ fix is present",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying conn_info_ fix...'",
+        "grep -q 'conn_info_' ${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.h || (echo '[ERROR] conn_info_ fix not found' && exit 1)",
+        "echo '[OK] conn_info_ fix verified in source'"
+      ]
+    },
+    {
+      "id": "04-build-nixl",
+      "name": "Build NIXL with LIBFABRIC plugin",
+      "skip_if": "test -f ${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/src/plugins/libfabric/libplugin_LIBFABRIC.so",
+      "commands": [
+        "echo '[INFO] Installing build dependencies...'",
+        "pip3 install meson ninja pybind11 cmake || echo '[WARN] Some dependencies may already be installed'",
+        "sudo apt-get install -y ninja-build cmake || echo '[WARN] ninja/cmake may already be installed'",
+        "echo '[INFO] Setting up CUDA and EFA environment...'",
+        "export PATH=/usr/local/cuda/bin:$PATH",
+        "export CUDA_HOME=/usr/local/cuda",
+        "export PKG_CONFIG_PATH=/opt/amazon/efa/lib/pkgconfig:$PKG_CONFIG_PATH",
+        "export CFLAGS=\"-I/opt/amazon/efa/include $CFLAGS\"",
+        "export CXXFLAGS=\"-I/opt/amazon/efa/include $CXXFLAGS\"",
+        "export LDFLAGS=\"-L/opt/amazon/efa/lib $LDFLAGS\"",
+        "echo '[INFO] Building NIXL with meson...'",
+        "cd ${NIXL_CLONE_DIR}",
+        "meson setup ${BUILD_SUBDIR} --buildtype=release",
+        "ninja -C ${BUILD_SUBDIR}",
+        "echo '[INFO] Verifying plugin build...'",
+        "ls -lh ${BUILD_SUBDIR}/src/plugins/libfabric/libplugin_LIBFABRIC.so",
+        "echo '[OK] NIXL plugin built successfully'"
+      ]
+    },
+    {
+      "id": "05-copy-plugin-to-nixl-package",
+      "name": "Replace NIXL package plugin with built version",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Locating NIXL package installation...'",
+        "NIXL_PKG_DIR=$(python3 -c 'import nixl, os; print(os.path.dirname(nixl.__file__))')",
+        "echo '[INFO] NIXL package directory: '$NIXL_PKG_DIR",
+        "echo '[INFO] Backing up original plugin...'",
+        "test -f $NIXL_PKG_DIR/_lib/libplugin_LIBFABRIC.so && cp $NIXL_PKG_DIR/_lib/libplugin_LIBFABRIC.so $NIXL_PKG_DIR/_lib/libplugin_LIBFABRIC.so.original && echo '[OK] Original plugin backed up' || echo '[WARN] Original plugin not found, skipping backup'",
+        "echo '[INFO] Copying built plugin to NIXL package...'",
+        "cp ${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/src/plugins/libfabric/libplugin_LIBFABRIC.so $NIXL_PKG_DIR/_lib/",
+        "ls -lh $NIXL_PKG_DIR/_lib/libplugin_LIBFABRIC.so",
+        "echo '[OK] Plugin replaced successfully'"
+      ]
+    },
+    {
+      "id": "06-verify-installation",
+      "name": "Verify NIXL with new plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying NIXL with new plugin...'",
+        "python3 -c 'from nixl._api import nixl_agent, nixl_agent_config; import uuid; cfg = nixl_agent_config(); agent = nixl_agent(str(uuid.uuid4()), cfg); print(\"Available plugins:\", agent.get_plugin_list())'",
+        "echo '[OK] NIXL verification complete'"
+      ]
+    }
+  ]
+}

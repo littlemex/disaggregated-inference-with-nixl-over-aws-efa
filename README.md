@@ -1,254 +1,351 @@
-# Disaggregated Inference with NIXL over AWS EFA
+# Disaggregated KV Cache Inference with NIXL over AWS EFA
 
-AWS EFA（Elastic Fabric Adapter）と NIXL（Network Interface for XPU Layers）を活用した分散推論の実装・検証プロジェクトです。
+AWS EFA (Elastic Fabric Adapter) と NIXL を使用した分散 KV cache 推論の完全再現可能な実装です。
+
+## バージョン情報
+
+- **最新バージョン**: v0.3.0
+- **検証済み環境**: Ubuntu 24.04 DLAMI on g7e.12xlarge (RTX PRO 6000 Blackwell 96GB x2)
+- **リージョン**: ap-northeast-1 (Tokyo)
 
 ## プロジェクト概要
 
-このリポジトリは、大規模言語モデル（LLM）の推論を効率化するための「分散推論（Disaggregated Inference）」アーキテクチャを AWS 環境で実装・検証するためのコードとドキュメントを提供します。
+このプロジェクトは、大規模言語モデル (LLM) の推論を Prefill (KV cache 生成) と Decode (トークン生成) に分離し、それぞれ異なる GPU ノードで実行することで、リソース利用効率を最適化する「Disaggregated Inference」を実装します。
+
+### アーキテクチャ
+
+```
+┌─────────────┐         ┌─────────────┐
+│  Producer   │         │  Consumer   │
+│   (Node1)   │         │   (Node2)   │
+│             │         │             │
+│ vLLM:8100   │◄────────┤ vLLM:8200   │
+│  (Prefill)  │  NIXL   │  (Decode)   │
+│             │  over   │             │
+│             │   EFA   │             │
+└─────────────┘         └──────┬──────┘
+                               │
+                               │ HTTP
+                               │
+                        ┌──────▼──────┐
+                        │    Proxy    │
+                        │  Server     │
+                        │   :8000     │
+                        └─────────────┘
+                               │
+                               ▼
+                          Client Request
+```
 
 ### 主な特徴
 
-- **AWS CDK による IaC**: MLflow tracking server と GPU インスタンス（EFA 対応）を CDK でデプロイ
-- **MLflow による実験管理**: すべての実験パラメータとメトリクスを SageMaker Managed MLflow で一元管理
-- **EFA による高速通信**: AWS EFA を活用した低レイテンシ・高スループットのノード間通信
-- **再現可能な実験環境**: すべての設定を IaC とスクリプトで管理し、実験の再現性を確保
+- **完全自動デプロイ**: CDK → deploy-v9.sh → run_inference_test.sh の 3 ステップ
+- **Ubuntu 24.04 DLAMI 対応**: /opt/pytorch 環境を活用、PEP 668 完全対応
+- **SSM 経由の自動化**: SSH キー不要、全操作を AWS Systems Manager 経由で実行
+- **冪等性保証**: タスクステート管理により、途中から再実行可能
+- **EFA による KV cache 転送**: Producer で生成した KV cache を Consumer が NIXL/EFA 経由で直接取得
+
+## クイックスタート
+
+### 前提条件
+
+- AWS CLI v2
+- Node.js 18+
+- AWS CDK v2
+- 適切な AWS 認証情報（EC2、S3、SSM、CloudFormation の権限）
+
+### ステップ 1: CDK デプロイ
+
+```bash
+cd cdk
+
+# 初回のみ: 依存関係インストールとビルド
+npm install
+npm run build
+
+# スタックデプロイ
+cdk deploy v9test-nixl-efa-dev-northeas-1 \
+  -c availabilityZone=ap-northeast-1a \
+  -c skipMlflow=true
+```
+
+デプロイ完了後、以下の情報を確認：
+
+```bash
+# 出力例
+Outputs:
+v9test-nixl-efa-dev-northeas-1.Node1InstanceId = i-03395a0827c156541
+v9test-nixl-efa-dev-northeas-1.Node1PrivateIp = 172.31.33.7
+v9test-nixl-efa-dev-northeas-1.Node2InstanceId = i-0e0d718b26626b48d
+v9test-nixl-efa-dev-northeas-1.Node2PrivateIp = 172.31.34.243
+v9test-nixl-efa-dev-northeas-1.ScriptsBucketName = v9test-nixl-efa-dev-northeas-scriptsbucket40feb4b1-cdi1udaxfajg
+```
+
+### ステップ 2: 設定ファイル作成
+
+```bash
+cd ../setup
+
+# configs/v9test-ap-northeast-1.env を編集
+# CDK の出力値を反映
+cat > configs/v9test-ap-northeast-1.env << 'EOF'
+# AWS Configuration
+S3_BUCKET="v9test-nixl-efa-dev-northeas-scriptsbucket40feb4b1-cdi1udaxfajg"
+AWS_REGION="ap-northeast-1"
+DEPLOYMENT_ID="v9test-tokyo-ubuntu24"
+
+# Node1 (Producer)
+NODE1_INSTANCE_ID="i-03395a0827c156541"
+NODE1_PRIVATE_IP="172.31.33.7"
+
+# Node2 (Consumer)
+NODE2_INSTANCE_ID="i-0e0d718b26626b48d"
+NODE2_PRIVATE_IP="172.31.34.243"
+
+# Remote user
+REMOTE_USER="ubuntu"
+
+# Service Configuration
+ENGINE_ID="v9test-nixl-efa-$(date +%Y%m%d)"
+PRODUCER_PORT="8100"
+CONSUMER_PORT="8200"
+PROXY_PORT="8000"
+
+# NIXL Configuration
+NIXL_PORT="14579"
+ZMQ_PORT="50100"
+NIXL_REPO="https://github.com/littlemex/nixl.git"
+NIXL_BRANCH="main"
+NIXL_CLONE_DIR="/tmp/nixl-build"
+BUILD_SUBDIR="build"
+PLUGIN_RELATIVE_PATH="src/plugins/libfabric/libplugin_LIBFABRIC.so"
+S3_PLUGIN_KEY="plugins/libplugin_LIBFABRIC.so"
+S3_PROXY_KEY="scripts/disagg_proxy_server.py"
+
+# vLLM Configuration
+MODEL_NAME="Qwen/Qwen2.5-32B-Instruct"
+TENSOR_PARALLEL_SIZE="2"
+PRODUCER_GPU_COUNT="1"
+CONSUMER_GPU_COUNT="1"
+GPU_MEMORY_UTILIZATION="0.9"
+MAX_MODEL_LEN="32000"
+MAX_NUM_BATCHED_TOKENS="8192"
+KV_BUFFER_SIZE="5000000000"
+KV_BUFFER_DEVICE="cpu"
+EOF
+```
+
+### ステップ 3: 完全自動デプロイ
+
+```bash
+# 環境セットアップ + vLLM/NIXL インストール + プラグインデプロイ
+./deploy-v9.sh configs/v9test-ap-northeast-1.env
+```
+
+**実行内容**:
+1. NIXL LIBFABRIC プラグインのビルドと S3 アップロード
+2. Producer/Consumer に vLLM v0.17.0 インストール
+3. Producer/Consumer に NIXL v0.10.0 インストール
+4. LIBFABRIC プラグインのデプロイ
+5. kv-transfer-config と起動スクリプトの生成・配置
+6. Proxy Server のデプロイ
+
+所要時間: 約 5-7 分
+
+### ステップ 4: 推論テスト実行
+
+```bash
+# Producer → Consumer → Proxy を順次起動し、推論リクエスト送信
+./run_inference_test.sh configs/v9test-ap-northeast-1.env
+```
+
+**実行内容**:
+1. 起動スクリプト再生成（最新テンプレート適用）
+2. Producer 起動（ポート 8100）
+3. Consumer 起動（ポート 8200）
+4. Proxy Server 起動（ポート 8000）
+5. ヘルスチェック
+6. 推論リクエスト送信
+
+所要時間: 約 3-5 分（モデルロード含む）
+
+### 成功時の出力
+
+```json
+{
+  "id": "cmpl-bc4c297360922d91",
+  "object": "text_completion",
+  "created": 1773040876,
+  "model": "Qwen/Qwen2.5-32B-Instruct",
+  "choices": [{
+    "index": 0,
+    "text": " If",
+    "logprobs": null,
+    "finish_reason": "length"
+  }]
+}
+```
 
 ## ディレクトリ構成
 
 ```
 disaggregated-inference-with-nixl-over-aws-efa/
-├── README.md                         # このファイル
-├── blog/                             # ブログ記事（実装の解説）
-│   ├── 01-environment-setup.md       # 第 1 回: 環境構築編
-│   └── ssm-session-manager-guide.md  # SSM Session Manager ガイド
-├── cdk/                              # AWS CDK による IaC
-│   ├── bin/app.ts                    # CDK アプリケーションエントリーポイント
+├── README.md                      # このファイル
+├── ARCHITECTURE.md                # アーキテクチャ詳細
+├── cdk/                           # AWS CDK (IaC)
+│   ├── bin/app.ts                 # CDK アプリ
 │   ├── lib/
-│   │   ├── mlflow-stack.ts           # SageMaker Managed MLflow スタック
-│   │   └── nixl-efa-stack.ts         # GPU インスタンス + EFA スタック
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── cdk.json
-└── scripts/                          # 検証スクリプト（インスタンス上で実行）
-    ├── mlflow_helper.py              # MLflow presigned URL 取得ヘルパー
-    ├── test-mlflow.py                # MLflow 接続テスト
-    ├── check-environment.sh          # 環境確認スクリプト
-    ├── setup-nccl-tests.sh           # NCCL tests セットアップ
-    └── nccl-benchmark.sh             # NCCL ベンチマーク実行
+│   │   ├── nixl-efa-stack.ts      # NIXL + EFA スタック
+│   │   └── mlflow-stack.ts        # MLflow スタック（オプション）
+│   └── package.json
+└── setup/                         # デプロイメント自動化
+    ├── deploy-v9.sh               # 完全自動デプロイスクリプト
+    ├── run_inference_test.sh      # 推論テストスクリプト
+    ├── task_runner.sh             # 汎用タスクランナー
+    ├── ssm_helper.sh              # SSM ヘルパー関数
+    ├── configs/                   # 環境設定ファイル
+    │   └── v9test-ap-northeast-1.env
+    ├── scripts/                   # インストールスクリプト
+    │   ├── install-vllm.sh        # vLLM インストール
+    │   ├── install-nixl.sh        # NIXL インストール
+    │   ├── deploy-plugin.sh       # プラグインデプロイ
+    │   ├── verify-setup.sh        # セットアップ検証
+    │   └── common.sh              # 共通関数
+    ├── templates/                 # 起動スクリプトテンプレート
+    │   ├── start_producer.sh.template
+    │   ├── start_consumer.sh.template
+    │   ├── start_proxy.sh.template
+    │   ├── kv_config_producer.json.template
+    │   └── kv_config_consumer.json.template
+    ├── tasks/                     # タスク定義（JSON）
+    │   ├── complete-deployment-v9.json
+    │   └── regenerate-startup-scripts.json
+    └── archive/                   # 古いスクリプト（参考用）
 ```
 
-## 前提条件
+## トラブルシューティング
 
-### ローカル環境
+### デプロイが途中で失敗した場合
 
-- Node.js 18+
-- AWS CLI v2
-- AWS CDK v2
-- Python 3.9+
-- 適切な AWS 認証情報
-
-### AWS リソース
-
-- AWS アカウント
-- 十分な EC2 容量制限（p4d.24xlarge または類似の GPU インスタンス）
-- EFA が利用可能なアベイラビリティゾーン
-
-## クイックスタート
-
-### 1. SSM Session Manager Plugin のインストール
-
-インスタンスへの接続に SSM Session Manager を使用します（SSH keypair 不要）。
+タスクステート管理により、途中から再実行可能です：
 
 ```bash
-# macOS (Homebrew)
-brew install --cask session-manager-plugin
-
-# Ubuntu/Debian
-curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o "session-manager-plugin.deb"
-sudo dpkg -i session-manager-plugin.deb
-
-# インストール確認
-session-manager-plugin --version
+# タスクステートをクリアして最初から再実行
+rm -f /tmp/task-state-*.json
+./deploy-v9.sh configs/v9test-ap-northeast-1.env
 ```
 
-詳細は [blog/ssm-session-manager-guide.md](blog/ssm-session-manager-guide.md) を参照してください。
+### Producer/Consumer が起動しない
 
-### 2. CDK のセットアップとデプロイ
+ログを確認：
 
 ```bash
-# CDK ディレクトリに移動
-cd cdk
+# Producer ログ
+aws ssm send-command \
+  --instance-ids i-03395a0827c156541 \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["tail -100 /home/ubuntu/producer.log"]' \
+  --region ap-northeast-1
 
-# 依存関係のインストール
-npm install
-
-# CDK のブートストラップ（初回のみ）
-npx cdk bootstrap
-
-# スタックのデプロイ
-npx cdk deploy --all \
-  --context availabilityZone=us-east-1a
+# Consumer ログ
+aws ssm send-command \
+  --instance-ids i-0e0d718b26626b48d \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["tail -100 /home/ubuntu/consumer.log"]' \
+  --region ap-northeast-1
 ```
 
-デプロイには 10-15 分程度かかります。完了後、CloudFormation の Outputs から以下の情報を取得できます：
+### ポートが Listen していない
 
-- `MlflowTrackingServerArn`: MLflow tracking server の ARN
-
-### 3. 環境確認
-
-デプロイしたインスタンスに SSM Session Manager で接続し、環境を確認します。
+サービスが起動中の可能性があります。モデルロードに時間がかかります（Qwen2.5-32B で 2-3 分）：
 
 ```bash
-# Node 1 のインスタンス ID を取得
-NODE1_ID=$(aws cloudformation describe-stack-resources \
-  --stack-name NixlEfaStack \
-  --logical-resource-id Node1 \
-  --query 'StackResources[0].PhysicalResourceId' \
-  --output text)
-
-# SSM Session Manager で接続
-aws ssm start-session --target $NODE1_ID
-
-# 環境確認スクリプトを実行（インスタンス上で）
-# リポジトリをクローンしてスクリプトを取得
-git clone https://github.com/<your-username>/disaggregated-inference-with-nixl-over-aws-efa.git
-cd disaggregated-inference-with-nixl-over-aws-efa/scripts
-./check-environment.sh
+# ポート確認
+aws ssm send-command \
+  --instance-ids i-03395a0827c156541 \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["ss -tlnp | grep -E \": (8100|8200)\""]' \
+  --region ap-northeast-1
 ```
-
-### 4. MLflow 接続テスト
-
-```bash
-# ローカルまたはリモートで実行
-# 環境変数 MLFLOW_TRACKING_ARN が設定されていることを確認
-echo $MLFLOW_TRACKING_ARN
-
-# MLflow 接続テスト
-python3 scripts/test-mlflow.py
-```
-
-## 実験の実行
-
-### Step 1: NCCL 通信ベンチマーク（オプション）
-
-EFA の実効性能を測定するため、NCCL 通信ベンチマークを実行できます。
-
-```bash
-# インスタンス上で実行
-
-# NCCL tests のインストール
-sudo bash scripts/setup-nccl-tests.sh
-
-# ベンチマーク実行（all_reduce と all_gather）
-bash scripts/nccl-benchmark.sh
-
-# GPU 数やデータサイズをカスタマイズ
-NUM_GPUS=2 MAX_SIZE=64M bash scripts/nccl-benchmark.sh
-```
-
-測定される指標：
-- **Bus Bandwidth**: 実効帯域幅（GB/s）
-- **Latency**: 通信レイテンシ（μs）
-- **Algorithm Bandwidth**: NCCL アルゴリズムの効率
-
-結果は `/tmp/nccl-benchmark-results/` に保存されます。
-
-### Step 2: vLLM による分散推論
-
-（今後のブログ記事で解説予定）
-
-- vLLM を使用した推論サーバーの起動
-- NIXL を使用した KV-cache 転送
-- ベンチマーク測定と MLflow への記録
 
 ## クリーンアップ
 
-不要になったリソースを削除します。
-
 ```bash
+# インスタンス上のプロセス停止
+aws ssm send-command \
+  --instance-ids i-03395a0827c156541 i-0e0d718b26626b48d \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["pkill -f vllm || true","pkill -f disagg_proxy || true"]' \
+  --region ap-northeast-1
+
+# CDK スタック削除
 cd cdk
-
-# すべてのスタックを削除
-npx cdk destroy --all
+cdk destroy v9test-nixl-efa-dev-northeas-1
 ```
 
-**重要**: SageMaker Managed MLflow は S3 バケットを作成します。完全に削除するには、S3 バケットを手動で削除する必要があります。
+## 技術仕様
 
-```bash
-# MLflow のアーティファクト用 S3 バケットを確認
-aws s3 ls | grep mlflow
+### ソフトウェアバージョン
 
-# バケットを削除（バケット名は環境により異なります）
-aws s3 rb s3://<mlflow-bucket-name> --force
-```
+- **OS**: Ubuntu 24.04 LTS (Deep Learning AMI GPU PyTorch)
+- **Python**: 3.12 (/opt/pytorch 環境)
+- **vLLM**: v0.17.0
+- **NIXL**: v0.10.0
+- **PyTorch**: 事前インストール（DLAMI）
+- **CUDA**: 事前インストール（DLAMI）
 
-## ブログ記事
+### ハードウェア
 
-実装の詳細と背景は、以下のブログ記事で解説しています：
+- **Instance Type**: g7e.12xlarge
+- **GPU**: NVIDIA RTX PRO 6000 Blackwell (96GB VRAM) x2
+- **Network**: EFA (Elastic Fabric Adapter) 100 Gbps
 
-1. [環境構築編](blog/01-environment-setup.md) - CDK による MLflow + GPU インスタンスのデプロイ
-2. （今後追加予定）推論実験編 - vLLM と NIXL を使用した分散推論の実装
+### ネットワーク構成
 
-## 技術スタック
+- **NIXL Protocol**: Request/Response (libfabric_backend.cpp)
+- **Transport**: EFA (fi_read one-sided RDMA)
+- **Side Channel**: ZMQ (ポート 50100)
+- **vLLM Ports**: Producer 8100, Consumer 8200
+- **Proxy Port**: 8000
 
-- **Infrastructure**: AWS CDK, CloudFormation
-- **Compute**: EC2 (p4d.24xlarge with EFA)
-- **Experiment Tracking**: SageMaker Managed MLflow Serverless
-- **Networking**: AWS EFA (Elastic Fabric Adapter)
-- **ML Framework**: vLLM, PyTorch
-- **Communication Library**: NIXL (Network Interface for XPU Layers)
+## 関連ドキュメント
 
-## 既知の課題と今後の改善点
+- [ARCHITECTURE.md](ARCHITECTURE.md) - アーキテクチャ詳細説明
+- [setup/README.md](setup/README.md) - デプロイメント詳細
+- [setup/README_COMPLETE_DEPLOYMENT.md](setup/README_COMPLETE_DEPLOYMENT.md) - 完全デプロイメント手順
 
-### L0-Baseline EFA パフォーマンス測定ツールの互換性
+## 参考リンク
 
-**課題**:
-- EFA (Elastic Fabric Adapter) と InfiniBand Verbs の API 非互換性により、標準的な perftest ツール（`ib_write_bw`, `ib_write_lat`）が EFA デバイスで動作しません
-- エラー: `Unable to create QP. Failed to create QP. Couldn't create IB resources`
-
-**原因**:
-- InfiniBand Verbs API 用のツール（perftest パッケージ）は EFA の libfabric API と互換性がありません
-- EFA は AWS 独自の RDMA ネットワークアーキテクチャで、libfabric API を使用します
-
-**代替手段**:
-- `fi_info`: EFA デバイス情報取得（動作確認済み）
-- `/opt/amazon/efa/bin/fi_pingpong`: EFA レイテンシ測定（動作確認済み）
-- NCCL tests: GPU 間通信ベンチマーク（動作確認済み）
-
-**今後の対応**:
-1. libfabric をソースからビルドして `fi_rdm_bw`/`fi_rdm_pingpong` を生成
-2. EFA SDK の最新版に含まれる可能性のある perftest ツールを確認
-3. 当面は L1-L5（vLLM ベンチマーク）を優先実行し、L0-Baseline は参考値として扱う
-
-**回避策（2026-03-01）**:
-- experiments/templates/baseline-fi-rdm-bw.json.jinja2: `ib_write_bw` を使用（EFA で動作せず）
-- experiments/templates/baseline-fi-rdm-pingpong.json.jinja2: `ib_write_lat` を使用（EFA で動作せず）
-- 測定結果は「SKIP」として JSON 出力され、実験は正常に継続されます
-
-### 測定優先順位
-
-1. **L1-Unified** (25 パターン): vLLM 統合モード - 最優先
-2. **L2-EFA** (25 パターン): EFA disaggregated モード
-3. **L3-TCP** (25 パターン): TCP disaggregated モード
-4. **L4-Analysis** (3 パターン): 分析スクリプト
-5. **L5-LowLevel** (25 パターン): 低レベルネットワーク測定
-6. **L0-Baseline** (8 パターン): ベースライン測定（参考値、時間があれば実施）
-
-## 参考資料
-
-- [AWS EFA Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html)
-- [SageMaker Managed MLflow](https://docs.aws.amazon.com/sagemaker/latest/dg/mlflow.html)
+- [NIXL Repository](https://github.com/littlemex/nixl)
 - [vLLM Documentation](https://docs.vllm.ai/)
-- [NIXL Repository](https://github.com/3outeille/nixl) （仮想リンク）
+- [AWS EFA Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html)
 
 ## ライセンス
 
-MIT License（または適切なライセンスを指定）
+MIT License
 
 ## 著者
 
-（著者情報）
+littlemex
 
-## 謝辞
+## 変更履歴
 
-このプロジェクトは、AWS の EFA 技術と MLflow による実験管理のベストプラクティスを組み合わせた研究プロジェクトです。
+### v0.3.0 (2026-03-09)
+
+最終更新: 2026-03-09 22:00 UTC
+
+- Ubuntu 24.04 DLAMI 完全対応
+- /opt/pytorch 環境統合
+- PEP 668 対応
+- 完全再現可能なデプロイメント達成
+- EFA 経由 KV cache 転送動作確認
+
+### v0.2.0 (2026-03-07)
+
+- Phase 2 vs Phase 3 詳細比較分析完了
+- 自動ビルド・デプロイワークフロー追加
+
+### v0.1.0 (2026-03-04)
+
+- 初期リリース
+- Phase 3 環境構築完了

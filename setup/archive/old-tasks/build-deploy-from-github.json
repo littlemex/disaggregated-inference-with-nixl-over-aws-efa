@@ -2,7 +2,7 @@
   "name": "Build and Deploy NIXL LIBFABRIC Plugin from GitHub",
   "description": "Complete automated workflow: clone littlemex/nixl from GitHub, build LIBFABRIC plugin, upload to S3, and deploy to EC2 nodes. Fully reproducible on any machine with git, ninja, and aws CLI.",
   "environment": {
-    "NIXL_REPO": "git@github.com:littlemex/nixl.git",
+    "NIXL_REPO": "https://github.com/littlemex/nixl.git",
     "NIXL_BRANCH": "main",
     "NIXL_CLONE_DIR": "/tmp/nixl-build",
     "BUILD_SUBDIR": "build",

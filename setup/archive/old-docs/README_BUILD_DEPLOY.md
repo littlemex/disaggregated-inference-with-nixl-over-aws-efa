@@ -45,7 +45,7 @@ ssh -i $SSH_KEY ubuntu@$NODE2_PUBLIC_IP "sudo systemctl restart vllm-consumer"
 ┌─────────────────────────────────────────────────────────────┐
 │  Step 1: ローカルビルド (管理マシン)                           │
 │                                                              │
-│  1. git clone git@github.com: littlemex/nixl.git            │
+│  1. git clone https://github.com/littlemex/nixl.git         │
 │     → /tmp/nixl-build/                                     │
 │                                                              │
 │  2. meson setup build                                       │

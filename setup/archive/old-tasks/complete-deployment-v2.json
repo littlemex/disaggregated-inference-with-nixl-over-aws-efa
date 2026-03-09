@@ -1,0 +1,222 @@
+{
+  "name": "Complete NIXL LIBFABRIC Deployment - Fully Automated",
+  "description": "完全自動化されたデプロイメント: GitHub clone → ビルド → S3 → EC2セットアップ → vLLM起動。Phase 3 の成功パターンを完全再現。環境変数は外部から設定可能。",
+  "environment": {
+    "NIXL_REPO": "${NIXL_REPO:-https://github.com/littlemex/nixl.git}",
+    "NIXL_BRANCH": "${NIXL_BRANCH:-main}",
+    "NIXL_CLONE_DIR": "${NIXL_CLONE_DIR:-/tmp/nixl-build}",
+    "BUILD_SUBDIR": "${BUILD_SUBDIR:-build}",
+    "PLUGIN_RELATIVE_PATH": "${PLUGIN_RELATIVE_PATH:-src/plugins/libfabric/libplugin_LIBFABRIC.so}",
+    "S3_BUCKET": "${S3_BUCKET}",
+    "S3_PLUGIN_KEY": "${S3_PLUGIN_KEY:-plugins/libplugin_LIBFABRIC.so}",
+    "S3_SCRIPTS_PREFIX": "${S3_SCRIPTS_PREFIX:-scripts/deployment}",
+    "AWS_REGION": "${AWS_REGION}",
+    "SSH_KEY": "${SSH_KEY}",
+    "NODE1_PUBLIC_IP": "${NODE1_PUBLIC_IP}",
+    "NODE2_PUBLIC_IP": "${NODE2_PUBLIC_IP}",
+    "NODE1_PRIVATE_IP": "${NODE1_PRIVATE_IP}",
+    "NODE2_PRIVATE_IP": "${NODE2_PRIVATE_IP}",
+    "REMOTE_USER": "${REMOTE_USER:-ubuntu}",
+    "MODEL_NAME": "${MODEL_NAME:-Qwen/Qwen2.5-32B-Instruct}",
+    "PRODUCER_PORT": "${PRODUCER_PORT:-8100}",
+    "CONSUMER_PORT": "${CONSUMER_PORT:-8200}",
+    "NIXL_PORT": "${NIXL_PORT:-14579}",
+    "TENSOR_PARALLEL_SIZE": "${TENSOR_PARALLEL_SIZE:-2}",
+    "GPU_MEMORY_UTILIZATION": "${GPU_MEMORY_UTILIZATION:-0.9}",
+    "MAX_MODEL_LEN": "${MAX_MODEL_LEN:-32000}",
+    "MAX_NUM_BATCHED_TOKENS": "${MAX_NUM_BATCHED_TOKENS:-8192}",
+    "KV_BUFFER_SIZE": "${KV_BUFFER_SIZE:-5000000000}"
+  },
+  "tasks": [
+    {
+      "id": "00-check-libfabric-dev",
+      "name": "Check libfabric-dev installation",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking libfabric-dev installation...'",
+        "if ! dpkg -l | grep -q libfabric-dev; then",
+        "  echo '[ERROR] libfabric-dev is not installed'",
+        "  echo ''",
+        "  echo 'Please install libfabric-dev first:'",
+        "  echo '  sudo apt-get update'",
+        "  echo '  sudo apt-get install -y libfabric-dev'",
+        "  echo ''",
+        "  echo 'After installation, re-run this script.'",
+        "  exit 1",
+        "fi",
+        "echo '[OK] libfabric-dev is installed'"
+      ]
+    },
+    {
+      "id": "01-check-local-prerequisites",
+      "name": "Check local prerequisites (git, ninja, meson, aws)",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking local prerequisites...'",
+        "command -v git >/dev/null 2>&1 || { echo '[ERROR] git not found'; exit 1; }",
+        "command -v ninja >/dev/null 2>&1 || { echo '[ERROR] ninja not found. Install: pip install ninja'; exit 1; }",
+        "command -v meson >/dev/null 2>&1 || { echo '[ERROR] meson not found. Install: pip install meson'; exit 1; }",
+        "command -v aws >/dev/null 2>&1 || { echo '[ERROR] aws CLI not found'; exit 1; }",
+        "echo '[OK] All prerequisites satisfied'"
+      ]
+    },
+    {
+      "id": "02-clone-nixl-from-github",
+      "name": "Clone or update NIXL from GitHub",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Cloning NIXL from GitHub...'",
+        "if [ -d \"${NIXL_CLONE_DIR}/.git\" ]; then",
+        "  cd \"${NIXL_CLONE_DIR}\" && git fetch origin && git checkout ${NIXL_BRANCH} && git pull origin ${NIXL_BRANCH}",
+        "else",
+        "  rm -rf \"${NIXL_CLONE_DIR}\" && git clone \"${NIXL_REPO}\" \"${NIXL_CLONE_DIR}\" && cd \"${NIXL_CLONE_DIR}\" && git checkout ${NIXL_BRANCH}",
+        "fi",
+        "cd \"${NIXL_CLONE_DIR}\" && git log --oneline -1",
+        "echo '[OK] NIXL source ready'"
+      ]
+    },
+    {
+      "id": "03-verify-request-response-protocol",
+      "name": "Verify Request/Response protocol implementation",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying Request/Response protocol...'",
+        "grep -q 'loadRemoteConnInfo' \"${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.h\" || { echo '[ERROR] loadRemoteConnInfo not found'; exit 1; }",
+        "grep -q 'remote_conn_info' \"${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.cpp\" || { echo '[ERROR] remote_conn_info implementation not found'; exit 1; }",
+        "echo '[OK] Request/Response protocol verified'"
+      ]
+    },
+    {
+      "id": "04-setup-meson-build",
+      "name": "Setup meson build directory",
+      "skip_if": "test -f ${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/build.ninja",
+      "commands": [
+        "echo '[INFO] Setting up meson build...'",
+        "cd \"${NIXL_CLONE_DIR}\" && meson setup ${BUILD_SUBDIR} --prefix=/usr/local",
+        "echo '[OK] Meson configured'"
+      ]
+    },
+    {
+      "id": "05-build-nixl-plugin",
+      "name": "Build NIXL LIBFABRIC plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Building NIXL plugin...'",
+        "cd \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}\" && ninja",
+        "test -f \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\" || { echo '[ERROR] Plugin build failed'; exit 1; }",
+        "echo '[OK] Plugin built successfully'"
+      ]
+    },
+    {
+      "id": "06-verify-plugin-artifact",
+      "name": "Verify plugin artifact",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying plugin artifact...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "SO_SIZE=$(stat -c '%s' \"${PLUGIN_PATH}\")",
+        "SO_SIZE_KB=$((SO_SIZE / 1024))",
+        "echo \"[OK] Size: ${SO_SIZE_KB} KB\"",
+        "file \"${PLUGIN_PATH}\" | grep -q 'ELF.*shared object' || { echo '[ERROR] Not a valid ELF shared object'; exit 1; }",
+        "echo '[OK] Plugin artifact verified'"
+      ]
+    },
+    {
+      "id": "07-upload-to-s3",
+      "name": "Upload plugin to S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Uploading plugin to S3...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "aws s3 cp \"${PLUGIN_PATH}\" \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION}",
+        "aws s3 ls \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION} || { echo '[ERROR] S3 upload verification failed'; exit 1; }",
+        "echo '[OK] Plugin uploaded to S3'"
+      ]
+    },
+    {
+      "id": "08-check-node-connectivity",
+      "name": "Check SSH connectivity to both nodes",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Testing SSH connectivity...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'echo \"[OK] Node1 connected\"' || { echo '[ERROR] Cannot connect to Node1'; exit 1; }",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'echo \"[OK] Node2 connected\"' || { echo '[ERROR] Cannot connect to Node2'; exit 1; }",
+        "echo '[OK] SSH connectivity verified'"
+      ]
+    },
+    {
+      "id": "09-setup-node1",
+      "name": "Setup Node1 (Producer) with vLLM + NIXL",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Setting up Node1 (Producer)...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" << 'ENDSSH'",
+        "set -e",
+        "echo '[STEP 1/4] Installing vLLM v0.17.0...'",
+        "python3 -m pip install --no-cache-dir 'vllm==0.17.0' --user -q || { echo '[ERROR] vLLM install failed'; exit 1; }",
+        "python3 -c 'import vllm; print(f\"[OK] vLLM {vllm.__version__} installed\")'",
+        "echo '[STEP 2/4] Installing NIXL v0.10.0...'",
+        "python3 -m pip install --no-cache-dir 'nixl[cu12]' --user -q || { echo '[ERROR] NIXL install failed'; exit 1; }",
+        "python3 -c 'import nixl; print(\"[OK] NIXL installed\")'",
+        "echo '[STEP 3/4] Deploying custom LIBFABRIC plugin...'",
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "aws s3 cp \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" \"${PLUGIN_DIR}/libplugin_LIBFABRIC.so\" --region ${AWS_REGION} --quiet || { echo '[ERROR] Plugin download failed'; exit 1; }",
+        "chmod 755 \"${PLUGIN_DIR}/libplugin_LIBFABRIC.so\"",
+        "ls -lh \"${PLUGIN_DIR}/libplugin_LIBFABRIC.so\"",
+        "echo '[STEP 4/4] Verifying setup...'",
+        "python3 -c 'import nixl; import os; plugin_dir = os.path.join(os.path.dirname(nixl.__file__), \"_lib\"); plugins = [f for f in os.listdir(plugin_dir) if f.startswith(\"libplugin_\") and f.endswith(\".so\")]; print(f\"[OK] Plugins: {plugins}\"); assert \"libplugin_LIBFABRIC.so\" in plugins'",
+        "echo '[SUCCESS] Node1 setup complete'",
+        "ENDSSH",
+        "echo '[OK] Node1 setup complete'"
+      ]
+    },
+    {
+      "id": "10-setup-node2",
+      "name": "Setup Node2 (Consumer) with vLLM + NIXL",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Setting up Node2 (Consumer)...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=no \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" << 'ENDSSH'",
+        "set -e",
+        "echo '[STEP 1/4] Installing vLLM v0.17.0...'",
+        "python3 -m pip install --no-cache-dir 'vllm==0.17.0' --user -q || { echo '[ERROR] vLLM install failed'; exit 1; }",
+        "python3 -c 'import vllm; print(f\"[OK] vLLM {vllm.__version__} installed\")'",
+        "echo '[STEP 2/4] Installing NIXL v0.10.0...'",
+        "python3 -m pip install --no-cache-dir 'nixl[cu12]' --user -q || { echo '[ERROR] NIXL install failed'; exit 1; }",
+        "python3 -c 'import nixl; print(\"[OK] NIXL installed\")'",
+        "echo '[STEP 3/4] Deploying custom LIBFABRIC plugin...'",
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))')",
+        "PLUGIN_DIR=\"${NIXL_DIR}/_lib\"",
+        "aws s3 cp \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" \"${PLUGIN_DIR}/libplugin_LIBFABRIC.so\" --region ${AWS_REGION} --quiet || { echo '[ERROR] Plugin download failed'; exit 1; }",
+        "chmod 755 \"${PLUGIN_DIR}/libplugin_LIBFABRIC.so\"",
+        "ls -lh \"${PLUGIN_DIR}/libplugin_LIBFABRIC.so\"",
+        "echo '[STEP 4/4] Verifying setup...'",
+        "python3 -c 'import nixl; import os; plugin_dir = os.path.join(os.path.dirname(nixl.__file__), \"_lib\"); plugins = [f for f in os.listdir(plugin_dir) if f.startswith(\"libplugin_\") and f.endswith(\".so\")]; print(f\"[OK] Plugins: {plugins}\"); assert \"libplugin_LIBFABRIC.so\" in plugins'",
+        "echo '[SUCCESS] Node2 setup complete'",
+        "ENDSSH",
+        "echo '[OK] Node2 setup complete'"
+      ]
+    },
+    {
+      "id": "11-display-summary",
+      "name": "Display deployment summary",
+      "skip_if": "",
+      "commands": [
+        "echo ''",
+        "echo '========================================='",
+        "echo 'Deployment Complete!'",
+        "echo '========================================='",
+        "echo ''",
+        "echo 'Node1 (Producer): ${NODE1_PUBLIC_IP} (${NODE1_PRIVATE_IP})'",
+        "echo 'Node2 (Consumer): ${NODE2_PUBLIC_IP} (${NODE2_PRIVATE_IP})'",
+        "echo ''",
+        "echo 'Next steps:'",
+        "echo '  1. Start Producer on Node1'",
+        "echo '  2. Start Consumer on Node2'",
+        "echo '  3. Run benchmark tests'",
+        "echo ''"
+      ]
+    }
+  ]
+}

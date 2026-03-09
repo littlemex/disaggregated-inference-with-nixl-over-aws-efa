@@ -1,0 +1,312 @@
+{
+  "name": "Complete NIXL LIBFABRIC Deployment - v5 (task_runner.sh Compatible)",
+  "description": "完全自動化デプロイメント。task_runner.sh の1行ずつ実行モデルに対応。SSH here-document を使わず、各タスクを小さく分割。Phase 3 の成功パターンを完全再現。",
+  "environment": {
+    "NIXL_REPO": "${NIXL_REPO:-https://github.com/littlemex/nixl.git}",
+    "NIXL_BRANCH": "${NIXL_BRANCH:-main}",
+    "NIXL_CLONE_DIR": "${NIXL_CLONE_DIR:-/tmp/nixl-build}",
+    "BUILD_SUBDIR": "${BUILD_SUBDIR:-build}",
+    "PLUGIN_RELATIVE_PATH": "${PLUGIN_RELATIVE_PATH:-src/plugins/libfabric/libplugin_LIBFABRIC.so}",
+    "S3_BUCKET": "${S3_BUCKET}",
+    "S3_PLUGIN_KEY": "${S3_PLUGIN_KEY:-plugins/libplugin_LIBFABRIC.so}",
+    "AWS_REGION": "${AWS_REGION}",
+    "SSH_KEY": "${SSH_KEY}",
+    "REMOTE_USER": "${REMOTE_USER:-ubuntu}",
+    "NODE1_PUBLIC_IP": "${NODE1_PUBLIC_IP}",
+    "NODE1_PRIVATE_IP": "${NODE1_PRIVATE_IP}",
+    "NODE2_PUBLIC_IP": "${NODE2_PUBLIC_IP}",
+    "NODE2_PRIVATE_IP": "${NODE2_PRIVATE_IP}",
+    "PRODUCER_ENGINE_ID": "${PRODUCER_ENGINE_ID:-producer-1}",
+    "PRODUCER_PORT": "${PRODUCER_PORT:-8100}",
+    "PRODUCER_NIXL_ENGINE": "${PRODUCER_NIXL_ENGINE:-producer}",
+    "CONSUMER_ENGINE_ID": "${CONSUMER_ENGINE_ID:-consumer-1}",
+    "CONSUMER_PORT": "${CONSUMER_PORT:-8200}",
+    "CONSUMER_NIXL_ENGINE": "${CONSUMER_NIXL_ENGINE:-consumer}",
+    "NIXL_PORT": "${NIXL_PORT:-14579}",
+    "MODEL_NAME": "${MODEL_NAME:-Qwen/Qwen2.5-32B-Instruct}",
+    "TENSOR_PARALLEL_SIZE": "${TENSOR_PARALLEL_SIZE:-2}",
+    "GPU_MEMORY_UTILIZATION": "${GPU_MEMORY_UTILIZATION:-0.9}",
+    "MAX_MODEL_LEN": "${MAX_MODEL_LEN:-32000}",
+    "MAX_NUM_BATCHED_TOKENS": "${MAX_NUM_BATCHED_TOKENS:-8192}",
+    "KV_BUFFER_SIZE": "${KV_BUFFER_SIZE:-5000000000}",
+    "KV_BUFFER_DEVICE": "${KV_BUFFER_DEVICE:-cpu}"
+  },
+  "tasks": [
+    {
+      "id": "00-check-libfabric-dev",
+      "name": "Check libfabric-dev installation",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking libfabric-dev installation...'",
+        "if ! dpkg -l | grep -q libfabric-dev; then echo '[ERROR] libfabric-dev is not installed. Install with: sudo apt-get install -y libfabric-dev'; exit 1; fi",
+        "echo '[OK] libfabric-dev is installed'"
+      ]
+    },
+    {
+      "id": "01-check-local-prerequisites",
+      "name": "Check local prerequisites",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking local prerequisites...'",
+        "command -v git >/dev/null 2>&1 || { echo '[ERROR] git not found'; exit 1; }",
+        "command -v ninja >/dev/null 2>&1 || { echo '[ERROR] ninja not found'; exit 1; }",
+        "command -v meson >/dev/null 2>&1 || { echo '[ERROR] meson not found'; exit 1; }",
+        "command -v aws >/dev/null 2>&1 || { echo '[ERROR] aws CLI not found'; exit 1; }",
+        "echo '[OK] All prerequisites satisfied'"
+      ]
+    },
+    {
+      "id": "02-clone-nixl-from-github",
+      "name": "Clone NIXL from GitHub",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Cloning NIXL from GitHub...'",
+        "if [ -d \"${NIXL_CLONE_DIR}/.git\" ]; then cd \"${NIXL_CLONE_DIR}\" && git fetch origin && git checkout ${NIXL_BRANCH} && git pull origin ${NIXL_BRANCH}; else rm -rf \"${NIXL_CLONE_DIR}\" && git clone \"${NIXL_REPO}\" \"${NIXL_CLONE_DIR}\" && cd \"${NIXL_CLONE_DIR}\" && git checkout ${NIXL_BRANCH}; fi",
+        "cd \"${NIXL_CLONE_DIR}\" && git log --oneline -1",
+        "echo '[OK] NIXL source ready'"
+      ]
+    },
+    {
+      "id": "03-verify-request-response-protocol",
+      "name": "Verify Request/Response protocol",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying Request/Response protocol...'",
+        "grep -q 'loadRemoteConnInfo' \"${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.h\" || { echo '[ERROR] loadRemoteConnInfo not found'; exit 1; }",
+        "grep -q 'remote_conn_info' \"${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.cpp\" || { echo '[ERROR] remote_conn_info not found'; exit 1; }",
+        "echo '[OK] Request/Response protocol verified'"
+      ]
+    },
+    {
+      "id": "04-setup-meson-build",
+      "name": "Setup meson build",
+      "skip_if": "test -f ${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/build.ninja",
+      "commands": [
+        "echo '[INFO] Setting up meson build...'",
+        "cd \"${NIXL_CLONE_DIR}\" && meson setup ${BUILD_SUBDIR} --prefix=/usr/local",
+        "echo '[OK] Meson configured'"
+      ]
+    },
+    {
+      "id": "05-build-nixl-plugin",
+      "name": "Build NIXL plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Building NIXL plugin...'",
+        "cd \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}\" && ninja",
+        "test -f \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\" || { echo '[ERROR] Build failed'; exit 1; }",
+        "echo '[OK] Plugin built'"
+      ]
+    },
+    {
+      "id": "06-verify-plugin",
+      "name": "Verify plugin artifact",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying plugin...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "SO_SIZE_KB=$(($(stat -c '%s' \"${PLUGIN_PATH}\") / 1024))",
+        "echo \"[OK] Size: ${SO_SIZE_KB} KB\"",
+        "file \"${PLUGIN_PATH}\" | grep -q 'ELF.*shared object' || { echo '[ERROR] Invalid ELF'; exit 1; }",
+        "echo '[OK] Plugin verified'"
+      ]
+    },
+    {
+      "id": "07-upload-to-s3",
+      "name": "Upload to S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Uploading to S3...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "aws s3 cp \"${PLUGIN_PATH}\" \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION}",
+        "aws s3 ls \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION} || { echo '[ERROR] Upload failed'; exit 1; }",
+        "echo '[OK] Uploaded to S3'"
+      ]
+    },
+    {
+      "id": "08-check-connectivity",
+      "name": "Check SSH connectivity",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Testing SSH...'",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'echo \"[OK] Node1\"' || { echo '[ERROR] Node1 unreachable'; exit 1; }",
+        "ssh -i \"${SSH_KEY}\" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'echo \"[OK] Node2\"' || { echo '[ERROR] Node2 unreachable'; exit 1; }",
+        "echo '[OK] SSH connectivity verified'"
+      ]
+    },
+    {
+      "id": "09-producer-install-vllm",
+      "name": "Producer: Install vLLM",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Installing vLLM v0.17.0...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'python3 -m pip install --no-cache-dir \"vllm==0.17.0\" --user -q && python3 -c \"import vllm; print(f\\\"[OK] vLLM {vllm.__version__}\\\")\"'",
+        "echo '[OK] vLLM installed on Producer'"
+      ]
+    },
+    {
+      "id": "10-producer-install-nixl",
+      "name": "Producer: Install NIXL",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Installing NIXL v0.10.0...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'python3 -m pip install --no-cache-dir \"nixl[cu12]\" --user -q && python3 -c \"import nixl; print(\\\"[OK] NIXL installed\\\")\"'",
+        "echo '[OK] NIXL installed on Producer'"
+      ]
+    },
+    {
+      "id": "11-producer-deploy-plugin",
+      "name": "Producer: Deploy LIBFABRIC plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Deploying LIBFABRIC plugin...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" \"NIXL_DIR=\\$(python3 -c 'import nixl, os; print(os.path.dirname(nixl.__file__))') && PLUGIN_DIR=\\\"\\${NIXL_DIR}/_lib\\\" && aws s3 cp \\\"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\\\" \\\"\\${PLUGIN_DIR}/libplugin_LIBFABRIC.so\\\" --region ${AWS_REGION} --quiet && chmod 755 \\\"\\${PLUGIN_DIR}/libplugin_LIBFABRIC.so\\\" && ls -lh \\\"\\${PLUGIN_DIR}/libplugin_LIBFABRIC.so\\\"\"",
+        "echo '[OK] Plugin deployed on Producer'"
+      ]
+    },
+    {
+      "id": "12-producer-create-config-files",
+      "name": "Producer: Create configuration files",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Creating configuration files...'",
+        "mkdir -p /tmp/nixl-producer-config",
+        "cat > /tmp/nixl-producer-config/.env << 'ENVEOF'\nexport ENGINE_ID=\"${PRODUCER_ENGINE_ID}\"\nexport NIXL_ENGINE=\"${PRODUCER_NIXL_ENGINE}\"\nexport NIXL_PORT=\"${NIXL_PORT}\"\nexport KV_BUFFER_DEVICE=\"${KV_BUFFER_DEVICE}\"\nexport CONSUMER_ADDR=\"${NODE2_PRIVATE_IP}:${CONSUMER_PORT}\"\nexport VLLM_PORT=\"${PRODUCER_PORT}\"\nexport MODEL_NAME=\"${MODEL_NAME}\"\nexport TENSOR_PARALLEL_SIZE=\"${TENSOR_PARALLEL_SIZE}\"\nexport GPU_MEMORY_UTILIZATION=\"${GPU_MEMORY_UTILIZATION}\"\nexport MAX_MODEL_LEN=\"${MAX_MODEL_LEN}\"\nexport MAX_NUM_BATCHED_TOKENS=\"${MAX_NUM_BATCHED_TOKENS}\"\nexport KV_BUFFER_SIZE=\"${KV_BUFFER_SIZE}\"\nENVEOF",
+        "cat > /tmp/nixl-producer-config/start.sh << 'SCRIPTEOF'\n#!/bin/bash\nset -euo pipefail\ncd \"$(dirname \"$0\")\"\nsource .env\necho \"[INFO] Starting Producer...\"\necho \"  ENGINE_ID: $ENGINE_ID\"\necho \"  NIXL_ENGINE: $NIXL_ENGINE\"\necho \"  Port: $VLLM_PORT\"\necho \"  Consumer: $CONSUMER_ADDR\"\nvllm serve \"$MODEL_NAME\" \\\n  --port \"$VLLM_PORT\" \\\n  --tensor-parallel-size \"$TENSOR_PARALLEL_SIZE\" \\\n  --gpu-memory-utilization \"$GPU_MEMORY_UTILIZATION\" \\\n  --max-model-len \"$MAX_MODEL_LEN\" \\\n  --max-num-batched-tokens \"$MAX_NUM_BATCHED_TOKENS\" \\\n  --kv-buffer-size \"$KV_BUFFER_SIZE\" \\\n  --kv-buffer-device \"$KV_BUFFER_DEVICE\" \\\n  --trust-remote-code\nSCRIPTEOF",
+        "sed -i \"s/\\${PRODUCER_ENGINE_ID}/${PRODUCER_ENGINE_ID}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${PRODUCER_NIXL_ENGINE}/${PRODUCER_NIXL_ENGINE}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${NIXL_PORT}/${NIXL_PORT}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${KV_BUFFER_DEVICE}/${KV_BUFFER_DEVICE}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${NODE2_PRIVATE_IP}/${NODE2_PRIVATE_IP}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${CONSUMER_PORT}/${CONSUMER_PORT}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${PRODUCER_PORT}/${PRODUCER_PORT}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${MODEL_NAME}/${MODEL_NAME}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${TENSOR_PARALLEL_SIZE}/${TENSOR_PARALLEL_SIZE}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${GPU_MEMORY_UTILIZATION}/${GPU_MEMORY_UTILIZATION}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${MAX_MODEL_LEN}/${MAX_MODEL_LEN}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${MAX_NUM_BATCHED_TOKENS}/${MAX_NUM_BATCHED_TOKENS}/g\" /tmp/nixl-producer-config/.env",
+        "sed -i \"s/\\${KV_BUFFER_SIZE}/${KV_BUFFER_SIZE}/g\" /tmp/nixl-producer-config/.env",
+        "echo '[OK] Config files created locally'"
+      ]
+    },
+    {
+      "id": "13-producer-upload-config",
+      "name": "Producer: Upload configuration to remote",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Uploading configuration...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'mkdir -p ~/nixl-producer'",
+        "scp -i \"${SSH_KEY}\" /tmp/nixl-producer-config/.env \"${REMOTE_USER}@${NODE1_PUBLIC_IP}:~/nixl-producer/.env\"",
+        "scp -i \"${SSH_KEY}\" /tmp/nixl-producer-config/start.sh \"${REMOTE_USER}@${NODE1_PUBLIC_IP}:~/nixl-producer/start.sh\"",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'chmod +x ~/nixl-producer/start.sh'",
+        "echo '[OK] Configuration uploaded to Producer'"
+      ]
+    },
+    {
+      "id": "14-producer-verify",
+      "name": "Producer: Verify setup",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Verifying setup...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE1_PUBLIC_IP}\" 'python3 -c \"import nixl, os; d=os.path.join(os.path.dirname(nixl.__file__),\\\"_lib\\\"); print(f\\\"[OK] {len([f for f in os.listdir(d) if \\\\\\\"LIBFABRIC\\\\\\\" in f])} LIBFABRIC plugin(s)\\\")\"'",
+        "echo '[SUCCESS] Producer setup complete'"
+      ]
+    },
+    {
+      "id": "15-consumer-install-vllm",
+      "name": "Consumer: Install vLLM",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Installing vLLM v0.17.0...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'python3 -m pip install --no-cache-dir \"vllm==0.17.0\" --user -q && python3 -c \"import vllm; print(f\\\"[OK] vLLM {vllm.__version__}\\\")\"'",
+        "echo '[OK] vLLM installed on Consumer'"
+      ]
+    },
+    {
+      "id": "16-consumer-install-nixl",
+      "name": "Consumer: Install NIXL",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Installing NIXL v0.10.0...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'python3 -m pip install --no-cache-dir \"nixl[cu12]\" --user -q && python3 -c \"import nixl; print(\\\"[OK] NIXL installed\\\")\"'",
+        "echo '[OK] NIXL installed on Consumer'"
+      ]
+    },
+    {
+      "id": "17-consumer-deploy-plugin",
+      "name": "Consumer: Deploy LIBFABRIC plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Deploying LIBFABRIC plugin...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" \"NIXL_DIR=\\$(python3 -c 'import nixl, os; print(os.path.dirname(nixl.__file__))') && PLUGIN_DIR=\\\"\\${NIXL_DIR}/_lib\\\" && aws s3 cp \\\"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\\\" \\\"\\${PLUGIN_DIR}/libplugin_LIBFABRIC.so\\\" --region ${AWS_REGION} --quiet && chmod 755 \\\"\\${PLUGIN_DIR}/libplugin_LIBFABRIC.so\\\" && ls -lh \\\"\\${PLUGIN_DIR}/libplugin_LIBFABRIC.so\\\"\"",
+        "echo '[OK] Plugin deployed on Consumer'"
+      ]
+    },
+    {
+      "id": "18-consumer-create-config-files",
+      "name": "Consumer: Create configuration files",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Creating configuration files...'",
+        "mkdir -p /tmp/nixl-consumer-config",
+        "cat > /tmp/nixl-consumer-config/.env << 'ENVEOF'\nexport ENGINE_ID=\"${CONSUMER_ENGINE_ID}\"\nexport NIXL_ENGINE=\"${CONSUMER_NIXL_ENGINE}\"\nexport NIXL_PORT=\"${NIXL_PORT}\"\nexport KV_BUFFER_DEVICE=\"${KV_BUFFER_DEVICE}\"\nexport VLLM_PORT=\"${CONSUMER_PORT}\"\nexport MODEL_NAME=\"${MODEL_NAME}\"\nexport TENSOR_PARALLEL_SIZE=\"${TENSOR_PARALLEL_SIZE}\"\nexport GPU_MEMORY_UTILIZATION=\"${GPU_MEMORY_UTILIZATION}\"\nexport MAX_MODEL_LEN=\"${MAX_MODEL_LEN}\"\nexport MAX_NUM_BATCHED_TOKENS=\"${MAX_NUM_BATCHED_TOKENS}\"\nexport KV_BUFFER_SIZE=\"${KV_BUFFER_SIZE}\"\nENVEOF",
+        "cat > /tmp/nixl-consumer-config/start.sh << 'SCRIPTEOF'\n#!/bin/bash\nset -euo pipefail\ncd \"$(dirname \"$0\")\"\nsource .env\necho \"[INFO] Starting Consumer...\"\necho \"  ENGINE_ID: $ENGINE_ID\"\necho \"  NIXL_ENGINE: $NIXL_ENGINE\"\necho \"  Port: $VLLM_PORT\"\nvllm serve \"$MODEL_NAME\" \\\n  --port \"$VLLM_PORT\" \\\n  --tensor-parallel-size \"$TENSOR_PARALLEL_SIZE\" \\\n  --gpu-memory-utilization \"$GPU_MEMORY_UTILIZATION\" \\\n  --max-model-len \"$MAX_MODEL_LEN\" \\\n  --max-num-batched-tokens \"$MAX_NUM_BATCHED_TOKENS\" \\\n  --kv-buffer-size \"$KV_BUFFER_SIZE\" \\\n  --kv-buffer-device \"$KV_BUFFER_DEVICE\" \\\n  --trust-remote-code\nSCRIPTEOF",
+        "sed -i \"s/\\${CONSUMER_ENGINE_ID}/${CONSUMER_ENGINE_ID}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${CONSUMER_NIXL_ENGINE}/${CONSUMER_NIXL_ENGINE}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${NIXL_PORT}/${NIXL_PORT}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${KV_BUFFER_DEVICE}/${KV_BUFFER_DEVICE}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${CONSUMER_PORT}/${CONSUMER_PORT}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${MODEL_NAME}/${MODEL_NAME}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${TENSOR_PARALLEL_SIZE}/${TENSOR_PARALLEL_SIZE}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${GPU_MEMORY_UTILIZATION}/${GPU_MEMORY_UTILIZATION}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${MAX_MODEL_LEN}/${MAX_MODEL_LEN}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${MAX_NUM_BATCHED_TOKENS}/${MAX_NUM_BATCHED_TOKENS}/g\" /tmp/nixl-consumer-config/.env",
+        "sed -i \"s/\\${KV_BUFFER_SIZE}/${KV_BUFFER_SIZE}/g\" /tmp/nixl-consumer-config/.env",
+        "echo '[OK] Config files created locally'"
+      ]
+    },
+    {
+      "id": "19-consumer-upload-config",
+      "name": "Consumer: Upload configuration to remote",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Uploading configuration...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'mkdir -p ~/nixl-consumer'",
+        "scp -i \"${SSH_KEY}\" /tmp/nixl-consumer-config/.env \"${REMOTE_USER}@${NODE2_PUBLIC_IP}:~/nixl-consumer/.env\"",
+        "scp -i \"${SSH_KEY}\" /tmp/nixl-consumer-config/start.sh \"${REMOTE_USER}@${NODE2_PUBLIC_IP}:~/nixl-consumer/start.sh\"",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'chmod +x ~/nixl-consumer/start.sh'",
+        "echo '[OK] Configuration uploaded to Consumer'"
+      ]
+    },
+    {
+      "id": "20-consumer-verify",
+      "name": "Consumer: Verify setup",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Verifying setup...'",
+        "ssh -i \"${SSH_KEY}\" \"${REMOTE_USER}@${NODE2_PUBLIC_IP}\" 'python3 -c \"import nixl, os; d=os.path.join(os.path.dirname(nixl.__file__),\\\"_lib\\\"); print(f\\\"[OK] {len([f for f in os.listdir(d) if \\\\\\\"LIBFABRIC\\\\\\\" in f])} LIBFABRIC plugin(s)\\\")\"'",
+        "echo '[SUCCESS] Consumer setup complete'"
+      ]
+    },
+    {
+      "id": "21-summary",
+      "name": "Display summary",
+      "skip_if": "",
+      "commands": [
+        "echo ''",
+        "echo '========================================='",
+        "echo 'Deployment Complete!'",
+        "echo '========================================='",
+        "echo ''",
+        "echo 'Producer (Node1): ${NODE1_PUBLIC_IP}'",
+        "echo '  ENGINE_ID: ${PRODUCER_ENGINE_ID}'",
+        "echo '  Start: ssh -i ${SSH_KEY} ${REMOTE_USER}@${NODE1_PUBLIC_IP} \"cd ~/nixl-producer && ./start.sh\"'",
+        "echo ''",
+        "echo 'Consumer (Node2): ${NODE2_PUBLIC_IP}'",
+        "echo '  ENGINE_ID: ${CONSUMER_ENGINE_ID}'",
+        "echo '  Start: ssh -i ${SSH_KEY} ${REMOTE_USER}@${NODE2_PUBLIC_IP} \"cd ~/nixl-consumer && ./start.sh\"'",
+        "echo ''"
+      ]
+    }
+  ]
+}

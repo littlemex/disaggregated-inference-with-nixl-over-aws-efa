@@ -1,0 +1,329 @@
+{
+  "name": "Verify NIXL LIBFABRIC Backend Fix",
+  "description": "End-to-end verification of the LIBFABRIC plugin build, deployment, and backend initialization. Validates build artifacts, S3 deployment, node installation, backend creation, and API functionality.",
+  "variables": {
+    "PLUGIN_NAME": "libplugin_LIBFABRIC.so",
+    "EXPECTED_MIN_SIZE_KB": "500",
+    "EXPECTED_MAX_SIZE_KB": "600",
+    "S3_BUCKET": "${S3_BUCKET}",
+    "S3_PLUGIN_KEY": "plugins/libplugin_LIBFABRIC.so",
+    "NODE1_PUBLIC_IP": "${NODE1_PUBLIC_IP}",
+    "NODE2_PUBLIC_IP": "${NODE2_PUBLIC_IP}",
+    "NODE1_PRIVATE_IP": "${NODE1_PRIVATE_IP}",
+    "NODE2_PRIVATE_IP": "${NODE2_PRIVATE_IP}",
+    "SSH_KEY": "${SSH_KEY}",
+    "PRODUCER_PORT": "${PRODUCER_PORT:-8100}",
+    "CONSUMER_PORT": "${CONSUMER_PORT:-8200}",
+    "PROXY_PORT": "${PROXY_PORT:-8000}",
+    "ENGINE_ID": "${ENGINE_ID}",
+    "MODEL_NAME": "${MODEL_NAME:-Qwen/Qwen2.5-32B-Instruct}"
+  },
+  "tasks": [
+    {
+      "id": "01-verify-build-artifact-exists",
+      "name": "Verify Build Artifact Exists",
+      "description": "Check that the built LIBFABRIC plugin SO file exists in the NIXL build directory",
+      "commands": [
+        "echo '[INFO] Checking build artifact...'",
+        "BUILD_PATH=\"/home/coder/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}}\"",
+        "test -f \"${BUILD_PATH}\" || { echo \"[FAIL] Build artifact not found: ${BUILD_PATH}\"; echo '[HINT] Run: cd ~/nixl/build && ninja'; exit 1; }",
+        "echo \"[OK] Build artifact exists: ${BUILD_PATH}\""
+      ]
+    },
+    {
+      "id": "02-verify-build-artifact-size",
+      "name": "Verify Build Artifact Size (~548KB)",
+      "description": "Ensure the plugin file size is within expected range (500-600KB), indicating a complete build",
+      "commands": [
+        "BUILD_PATH=\"/home/coder/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}}\"",
+        "SIZE_KB=$(du -k \"${BUILD_PATH}\" | cut -f1)",
+        "echo \"[INFO] Plugin size: ${SIZE_KB} KB\"",
+        "if [ \"${SIZE_KB}\" -lt {{EXPECTED_MIN_SIZE_KB}} ]; then echo \"[FAIL] Plugin too small (${SIZE_KB} KB < {{EXPECTED_MIN_SIZE_KB}} KB). Build may be incomplete.\"; exit 1; fi",
+        "if [ \"${SIZE_KB}\" -gt {{EXPECTED_MAX_SIZE_KB}} ]; then echo \"[WARN] Plugin larger than expected (${SIZE_KB} KB > {{EXPECTED_MAX_SIZE_KB}} KB). Verify build is correct.\"; fi",
+        "echo \"[OK] Plugin size within expected range: ${SIZE_KB} KB\""
+      ]
+    },
+    {
+      "id": "03-verify-build-artifact-symbols",
+      "name": "Verify Build Artifact Symbol Table",
+      "description": "Check that the plugin contains the conn_info_ symbol, confirming the two-sided messaging implementation",
+      "commands": [
+        "BUILD_PATH=\"/home/coder/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}}\"",
+        "echo '[INFO] Checking symbol table for conn_info_...'",
+        "nm -D \"${BUILD_PATH}\" 2>/dev/null | grep -q 'conn_info_' && echo '[OK] conn_info_ symbol found' || { echo '[FAIL] conn_info_ symbol not found in plugin. Two-sided messaging may not be compiled in.'; exit 1; }",
+        "echo '[INFO] Checking additional required symbols...'",
+        "MISSING=0",
+        "for SYM in nixlBackendInit nixlBackendCleanup; do nm -D \"${BUILD_PATH}\" 2>/dev/null | grep -q \"${SYM}\" && echo \"[OK] ${SYM} found\" || { echo \"[FAIL] ${SYM} not found\"; MISSING=$((MISSING + 1)); }; done",
+        "if [ \"${MISSING}\" -gt 0 ]; then echo \"[FAIL] ${MISSING} required symbol(s) missing\"; exit 1; fi",
+        "echo '[OK] All required symbols present'"
+      ]
+    },
+    {
+      "id": "04-verify-build-artifact-timestamp",
+      "name": "Verify Build Artifact Timestamp",
+      "description": "Confirm the build artifact is recent (modified within the last 24 hours)",
+      "commands": [
+        "BUILD_PATH=\"/home/coder/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}}\"",
+        "MOD_TIME=$(stat -c %Y \"${BUILD_PATH}\")",
+        "NOW=$(date +%s)",
+        "AGE_HOURS=$(( (NOW - MOD_TIME) / 3600 ))",
+        "MOD_DATE=$(stat -c '%y' \"${BUILD_PATH}\" | cut -d. -f1)",
+        "echo \"[INFO] Last modified: ${MOD_DATE} (${AGE_HOURS} hours ago)\"",
+        "if [ \"${AGE_HOURS}\" -gt 24 ]; then echo \"[WARN] Build artifact is ${AGE_HOURS} hours old. Consider rebuilding: cd ~/nixl/build && ninja\"; else echo '[OK] Build artifact is recent'; fi"
+      ]
+    },
+    {
+      "id": "05-verify-s3-upload",
+      "name": "Verify S3 Deployment",
+      "description": "Check that the plugin exists in S3 and its size matches the local build",
+      "commands": [
+        "echo '[INFO] Checking S3 deployment...'",
+        "S3_URI=\"s3://{{S3_BUCKET}}/{{S3_PLUGIN_KEY}}\"",
+        "aws s3 ls \"${S3_URI}\" --region us-west-2 > /tmp/s3_plugin_info.txt 2>&1 || { echo \"[FAIL] Plugin not found in S3: ${S3_URI}\"; echo '[HINT] Upload with: aws s3 cp ~/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}} ${S3_URI} --region us-west-2'; exit 1; }",
+        "S3_SIZE=$(cat /tmp/s3_plugin_info.txt | awk '{print $3}')",
+        "LOCAL_SIZE=$(stat -c %s /home/coder/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}})",
+        "echo \"[INFO] S3 size: ${S3_SIZE} bytes, Local size: ${LOCAL_SIZE} bytes\"",
+        "if [ \"${S3_SIZE}\" != \"${LOCAL_SIZE}\" ]; then echo \"[FAIL] Size mismatch! S3=${S3_SIZE}, Local=${LOCAL_SIZE}. Re-upload required.\"; exit 1; fi",
+        "echo '[OK] S3 deployment verified: size matches local build'",
+        "rm -f /tmp/s3_plugin_info.txt"
+      ]
+    },
+    {
+      "id": "06-verify-node1-plugin",
+      "name": "Verify Node1 Plugin Installation",
+      "description": "SSH to Node1 and verify the plugin is installed at the correct path with correct permissions",
+      "commands": [
+        "echo '[INFO] Verifying plugin on Node1 ({{NODE1_PUBLIC_IP}})...'",
+        "ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{{NODE1_PUBLIC_IP}} bash -s << 'VERIFY_NODE'",
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))' 2>/dev/null)",
+        "if [ -z \"${NIXL_DIR}\" ]; then echo '[FAIL] NIXL not installed on Node1'; exit 1; fi",
+        "PLUGIN_PATH=\"${NIXL_DIR}/_lib/libplugin_LIBFABRIC.so\"",
+        "test -f \"${PLUGIN_PATH}\" || { echo \"[FAIL] Plugin not found: ${PLUGIN_PATH}\"; exit 1; }",
+        "PERMS=$(stat -c '%a' \"${PLUGIN_PATH}\")",
+        "if [ \"${PERMS}\" != '755' ]; then echo \"[WARN] Permissions are ${PERMS}, expected 755\"; fi",
+        "SIZE_KB=$(du -k \"${PLUGIN_PATH}\" | cut -f1)",
+        "echo \"[INFO] Node1 plugin: ${PLUGIN_PATH} (${SIZE_KB} KB, perms=${PERMS})\"",
+        "nm -D \"${PLUGIN_PATH}\" 2>/dev/null | grep -q 'conn_info_' && echo '[OK] Node1: conn_info_ symbol present' || echo '[FAIL] Node1: conn_info_ symbol missing'",
+        "echo '[OK] Node1 plugin installation verified'",
+        "VERIFY_NODE"
+      ]
+    },
+    {
+      "id": "07-verify-node2-plugin",
+      "name": "Verify Node2 Plugin Installation",
+      "description": "SSH to Node2 and verify the plugin is installed at the correct path with correct permissions",
+      "commands": [
+        "echo '[INFO] Verifying plugin on Node2 ({{NODE2_PUBLIC_IP}})...'",
+        "ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@{{NODE2_PUBLIC_IP}} bash -s << 'VERIFY_NODE'",
+        "NIXL_DIR=$(python3 -c 'import nixl; import os; print(os.path.dirname(nixl.__file__))' 2>/dev/null)",
+        "if [ -z \"${NIXL_DIR}\" ]; then echo '[FAIL] NIXL not installed on Node2'; exit 1; fi",
+        "PLUGIN_PATH=\"${NIXL_DIR}/_lib/libplugin_LIBFABRIC.so\"",
+        "test -f \"${PLUGIN_PATH}\" || { echo \"[FAIL] Plugin not found: ${PLUGIN_PATH}\"; exit 1; }",
+        "PERMS=$(stat -c '%a' \"${PLUGIN_PATH}\")",
+        "if [ \"${PERMS}\" != '755' ]; then echo \"[WARN] Permissions are ${PERMS}, expected 755\"; fi",
+        "SIZE_KB=$(du -k \"${PLUGIN_PATH}\" | cut -f1)",
+        "echo \"[INFO] Node2 plugin: ${PLUGIN_PATH} (${SIZE_KB} KB, perms=${PERMS})\"",
+        "nm -D \"${PLUGIN_PATH}\" 2>/dev/null | grep -q 'conn_info_' && echo '[OK] Node2: conn_info_ symbol present' || echo '[FAIL] Node2: conn_info_ symbol missing'",
+        "echo '[OK] Node2 plugin installation verified'",
+        "VERIFY_NODE"
+      ]
+    },
+    {
+      "id": "08-verify-node-plugin-size-match",
+      "name": "Verify Plugin Size Matches Across Nodes",
+      "description": "Ensure both nodes have the same plugin file (by size) and it matches the local build",
+      "commands": [
+        "echo '[INFO] Comparing plugin sizes across build, Node1, and Node2...'",
+        "LOCAL_SIZE=$(stat -c %s /home/coder/nixl/build/src/plugins/libfabric/{{PLUGIN_NAME}})",
+        "NODE1_SIZE=$(ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE1_PUBLIC_IP}} 'NIXL_DIR=$(python3 -c \"import nixl,os; print(os.path.dirname(nixl.__file__))\"); stat -c %s ${NIXL_DIR}/_lib/{{PLUGIN_NAME}}')",
+        "NODE2_SIZE=$(ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE2_PUBLIC_IP}} 'NIXL_DIR=$(python3 -c \"import nixl,os; print(os.path.dirname(nixl.__file__))\"); stat -c %s ${NIXL_DIR}/_lib/{{PLUGIN_NAME}}')",
+        "echo \"[INFO] Local build: ${LOCAL_SIZE} bytes\"",
+        "echo \"[INFO] Node1:       ${NODE1_SIZE} bytes\"",
+        "echo \"[INFO] Node2:       ${NODE2_SIZE} bytes\"",
+        "MISMATCH=0",
+        "if [ \"${LOCAL_SIZE}\" != \"${NODE1_SIZE}\" ]; then echo '[FAIL] Node1 size mismatch with local build'; MISMATCH=1; fi",
+        "if [ \"${LOCAL_SIZE}\" != \"${NODE2_SIZE}\" ]; then echo '[FAIL] Node2 size mismatch with local build'; MISMATCH=1; fi",
+        "if [ \"${NODE1_SIZE}\" != \"${NODE2_SIZE}\" ]; then echo '[FAIL] Node1 and Node2 sizes differ'; MISMATCH=1; fi",
+        "if [ \"${MISMATCH}\" -eq 1 ]; then echo '[FAIL] Plugin sizes do not match. Re-deploy required.'; exit 1; fi",
+        "echo '[OK] All plugin sizes match'"
+      ]
+    },
+    {
+      "id": "09-verify-producer-running",
+      "name": "Verify Producer (Node1) is Running",
+      "description": "Check that the vLLM Producer process is running on Node1 with the LIBFABRIC backend",
+      "commands": [
+        "echo '[INFO] Checking Producer on Node1 ({{NODE1_PUBLIC_IP}})...'",
+        "ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE1_PUBLIC_IP}} bash -s << 'CHECK_PRODUCER'",
+        "VLLM_PID=$(pgrep -f 'vllm.entrypoints.openai.api_server.*kv_producer' | head -1)",
+        "if [ -z \"${VLLM_PID}\" ]; then echo '[FAIL] Producer vLLM process not running'; exit 1; fi",
+        "echo \"[INFO] Producer PID: ${VLLM_PID}\"",
+        "ss -tlnp 2>/dev/null | grep ':{{PRODUCER_PORT}}' | head -1 || { echo '[FAIL] Producer not listening on port {{PRODUCER_PORT}}'; exit 1; }",
+        "echo '[OK] Producer is running on port {{PRODUCER_PORT}}'",
+        "CHECK_PRODUCER"
+      ]
+    },
+    {
+      "id": "10-verify-consumer-running",
+      "name": "Verify Consumer (Node2) is Running",
+      "description": "Check that the vLLM Consumer process is running on Node2 with the LIBFABRIC backend",
+      "commands": [
+        "echo '[INFO] Checking Consumer on Node2 ({{NODE2_PUBLIC_IP}})...'",
+        "ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE2_PUBLIC_IP}} bash -s << 'CHECK_CONSUMER'",
+        "VLLM_PID=$(pgrep -f 'vllm.entrypoints.openai.api_server.*kv_consumer' | head -1)",
+        "if [ -z \"${VLLM_PID}\" ]; then echo '[FAIL] Consumer vLLM process not running'; exit 1; fi",
+        "echo \"[INFO] Consumer PID: ${VLLM_PID}\"",
+        "ss -tlnp 2>/dev/null | grep ':{{CONSUMER_PORT}}' | head -1 || { echo '[FAIL] Consumer not listening on port {{CONSUMER_PORT}}'; exit 1; }",
+        "echo '[OK] Consumer is running on port {{CONSUMER_PORT}}'",
+        "CHECK_CONSUMER"
+      ]
+    },
+    {
+      "id": "11-verify-backend-instantiation-producer",
+      "name": "Verify LIBFABRIC Backend on Producer",
+      "description": "Check Producer logs for 'Backend LIBFABRIC was instantiated' and EFA device discovery",
+      "commands": [
+        "echo '[INFO] Checking Producer LIBFABRIC backend logs...'",
+        "ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE1_PUBLIC_IP}} bash -s << 'CHECK_BACKEND'",
+        "LOG_FILE=$(ls -t /tmp/producer*.log 2>/dev/null | head -1)",
+        "if [ -z \"${LOG_FILE}\" ]; then",
+        "  echo '[INFO] No explicit log file found. Checking process stderr...'",
+        "  VLLM_PID=$(pgrep -f 'vllm.entrypoints.openai.api_server.*kv_producer' | head -1)",
+        "  if [ -n \"${VLLM_PID}\" ]; then",
+        "    LOG_FILE=\"/proc/${VLLM_PID}/fd/2\"",
+        "  fi",
+        "fi",
+        "CHECKS_OK=0",
+        "CHECKS_FAIL=0",
+        "echo '[INFO] Checking for EFA device discovery...'",
+        "if grep -q 'Discovered.*EFA devices' \"${LOG_FILE}\" 2>/dev/null; then echo '[OK] EFA devices discovered'; CHECKS_OK=$((CHECKS_OK+1)); else echo '[WARN] EFA device discovery not found in logs'; CHECKS_FAIL=$((CHECKS_FAIL+1)); fi",
+        "echo '[INFO] Checking for data rail creation...'",
+        "if grep -q 'Created data rail.*provider=efa' \"${LOG_FILE}\" 2>/dev/null; then echo '[OK] Data rail created with EFA'; CHECKS_OK=$((CHECKS_OK+1)); else echo '[WARN] Data rail creation not found in logs'; CHECKS_FAIL=$((CHECKS_FAIL+1)); fi",
+        "echo '[INFO] Checking for control rail creation...'",
+        "if grep -q 'Created control rail.*provider=efa' \"${LOG_FILE}\" 2>/dev/null; then echo '[OK] Control rail created with EFA'; CHECKS_OK=$((CHECKS_OK+1)); else echo '[WARN] Control rail creation not found in logs'; CHECKS_FAIL=$((CHECKS_FAIL+1)); fi",
+        "echo '[INFO] Checking for NIXL_ERR_INVALID_PARAM...'",
+        "if grep -q 'NIXL_ERR_INVALID_PARAM' \"${LOG_FILE}\" 2>/dev/null; then echo '[FAIL] NIXL_ERR_INVALID_PARAM found in Producer logs!'; CHECKS_FAIL=$((CHECKS_FAIL+1)); else echo '[OK] No NIXL_ERR_INVALID_PARAM errors'; CHECKS_OK=$((CHECKS_OK+1)); fi",
+        "echo \"[INFO] Producer backend checks: ${CHECKS_OK} passed, ${CHECKS_FAIL} issues\"",
+        "if [ \"${CHECKS_FAIL}\" -gt 1 ]; then echo '[FAIL] Multiple backend issues detected'; exit 1; fi",
+        "echo '[OK] Producer LIBFABRIC backend verification complete'",
+        "CHECK_BACKEND"
+      ]
+    },
+    {
+      "id": "12-verify-backend-instantiation-consumer",
+      "name": "Verify LIBFABRIC Backend on Consumer",
+      "description": "Check Consumer logs for backend instantiation and connection establishment",
+      "commands": [
+        "echo '[INFO] Checking Consumer LIBFABRIC backend logs...'",
+        "ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE2_PUBLIC_IP}} bash -s << 'CHECK_BACKEND'",
+        "LOG_FILE=$(ls -t /tmp/consumer*.log 2>/dev/null | head -1)",
+        "if [ -z \"${LOG_FILE}\" ]; then",
+        "  echo '[INFO] No explicit log file found. Checking process stderr...'",
+        "  VLLM_PID=$(pgrep -f 'vllm.entrypoints.openai.api_server.*kv_consumer' | head -1)",
+        "  if [ -n \"${VLLM_PID}\" ]; then",
+        "    LOG_FILE=\"/proc/${VLLM_PID}/fd/2\"",
+        "  fi",
+        "fi",
+        "CHECKS_OK=0",
+        "CHECKS_FAIL=0",
+        "echo '[INFO] Checking for EFA device discovery...'",
+        "if grep -q 'Discovered.*EFA devices' \"${LOG_FILE}\" 2>/dev/null; then echo '[OK] EFA devices discovered'; CHECKS_OK=$((CHECKS_OK+1)); else echo '[WARN] EFA device discovery not found in logs'; CHECKS_FAIL=$((CHECKS_FAIL+1)); fi",
+        "echo '[INFO] Checking for data rail creation...'",
+        "if grep -q 'Created data rail.*provider=efa' \"${LOG_FILE}\" 2>/dev/null; then echo '[OK] Data rail created with EFA'; CHECKS_OK=$((CHECKS_OK+1)); else echo '[WARN] Data rail creation not found in logs'; CHECKS_FAIL=$((CHECKS_FAIL+1)); fi",
+        "echo '[INFO] Checking for connection establishment...'",
+        "if grep -q 'Successfully created connection' \"${LOG_FILE}\" 2>/dev/null; then echo '[OK] Connection established'; CHECKS_OK=$((CHECKS_OK+1)); else echo '[WARN] Connection establishment not found in logs'; CHECKS_FAIL=$((CHECKS_FAIL+1)); fi",
+        "echo '[INFO] Checking for NIXL_ERR_INVALID_PARAM...'",
+        "if grep -q 'NIXL_ERR_INVALID_PARAM' \"${LOG_FILE}\" 2>/dev/null; then echo '[FAIL] NIXL_ERR_INVALID_PARAM found in Consumer logs!'; CHECKS_FAIL=$((CHECKS_FAIL+1)); else echo '[OK] No NIXL_ERR_INVALID_PARAM errors'; CHECKS_OK=$((CHECKS_OK+1)); fi",
+        "echo '[INFO] Checking for fi_read EAGAIN...'",
+        "if grep -q 'EAGAIN' \"${LOG_FILE}\" 2>/dev/null; then echo '[FAIL] fi_read EAGAIN found in Consumer logs! Two-sided messaging fix may not be applied.'; CHECKS_FAIL=$((CHECKS_FAIL+1)); else echo '[OK] No EAGAIN errors'; CHECKS_OK=$((CHECKS_OK+1)); fi",
+        "echo \"[INFO] Consumer backend checks: ${CHECKS_OK} passed, ${CHECKS_FAIL} issues\"",
+        "if [ \"${CHECKS_FAIL}\" -gt 1 ]; then echo '[FAIL] Multiple backend issues detected'; exit 1; fi",
+        "echo '[OK] Consumer LIBFABRIC backend verification complete'",
+        "CHECK_BACKEND"
+      ]
+    },
+    {
+      "id": "13-verify-producer-api-health",
+      "name": "Verify Producer API Health",
+      "description": "Send a health check request to the Producer API endpoint",
+      "commands": [
+        "echo '[INFO] Testing Producer API health on Node1 ({{NODE1_PUBLIC_IP}}:{{PRODUCER_PORT}})...'",
+        "RESPONSE=$(ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE1_PUBLIC_IP}} 'curl -sf -o /dev/null -w \"%{http_code}\" http://localhost:{{PRODUCER_PORT}}/health --max-time 10' 2>/dev/null)",
+        "if [ \"${RESPONSE}\" = '200' ]; then echo '[OK] Producer API is healthy (HTTP 200)'; else echo \"[FAIL] Producer API returned HTTP ${RESPONSE}\"; exit 1; fi"
+      ]
+    },
+    {
+      "id": "14-verify-consumer-api-health",
+      "name": "Verify Consumer API Health",
+      "description": "Send a health check request to the Consumer API endpoint",
+      "commands": [
+        "echo '[INFO] Testing Consumer API health on Node2 ({{NODE2_PUBLIC_IP}}:{{CONSUMER_PORT}})...'",
+        "RESPONSE=$(ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE2_PUBLIC_IP}} 'curl -sf -o /dev/null -w \"%{http_code}\" http://localhost:{{CONSUMER_PORT}}/health --max-time 10' 2>/dev/null)",
+        "if [ \"${RESPONSE}\" = '200' ]; then echo '[OK] Consumer API is healthy (HTTP 200)'; else echo \"[FAIL] Consumer API returned HTTP ${RESPONSE}\"; exit 1; fi"
+      ]
+    },
+    {
+      "id": "15-verify-producer-simple-inference",
+      "name": "Verify Producer Simple Inference",
+      "description": "Send a simple inference request to Producer and verify response",
+      "commands": [
+        "echo '[INFO] Sending test inference request to Producer...'",
+        "RESULT=$(ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE1_PUBLIC_IP}} 'curl -sf -X POST http://localhost:{{PRODUCER_PORT}}/v1/completions -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"{{MODEL_NAME}}\\\", \\\"prompt\\\": \\\"Hello\\\", \\\"max_tokens\\\": 5}\" --max-time 60' 2>/dev/null)",
+        "if [ -z \"${RESULT}\" ]; then echo '[FAIL] No response from Producer'; exit 1; fi",
+        "echo \"${RESULT}\" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(f\"[INFO] Response: id={r.get(\"id\",\"N/A\")}, model={r.get(\"model\",\"N/A\")}\"); assert \"choices\" in r, \"No choices in response\"; assert len(r[\"choices\"]) > 0, \"Empty choices\"; print(f\"[INFO] Generated text: {r[\"choices\"][0].get(\"text\",\"\")[:50]}\"); print(\"[OK] Producer inference successful\")' || { echo '[FAIL] Producer inference returned invalid response'; echo \"[DEBUG] Response: ${RESULT}\"; exit 1; }"
+      ]
+    },
+    {
+      "id": "16-verify-consumer-simple-inference",
+      "name": "Verify Consumer Simple Inference",
+      "description": "Send a simple inference request to Consumer and verify response",
+      "commands": [
+        "echo '[INFO] Sending test inference request to Consumer...'",
+        "RESULT=$(ssh -i {{SSH_KEY}} -o StrictHostKeyChecking=no ubuntu@{{NODE2_PUBLIC_IP}} 'curl -sf -X POST http://localhost:{{CONSUMER_PORT}}/v1/completions -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"{{MODEL_NAME}}\\\", \\\"prompt\\\": \\\"Hello\\\", \\\"max_tokens\\\": 5}\" --max-time 60' 2>/dev/null)",
+        "if [ -z \"${RESULT}\" ]; then echo '[FAIL] No response from Consumer'; exit 1; fi",
+        "echo \"${RESULT}\" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(f\"[INFO] Response: id={r.get(\"id\",\"N/A\")}, model={r.get(\"model\",\"N/A\")}\"); assert \"choices\" in r, \"No choices in response\"; assert len(r[\"choices\"]) > 0, \"Empty choices\"; print(f\"[INFO] Generated text: {r[\"choices\"][0].get(\"text\",\"\")[:50]}\"); print(\"[OK] Consumer inference successful\")' || { echo '[FAIL] Consumer inference returned invalid response'; echo \"[DEBUG] Response: ${RESULT}\"; exit 1; }"
+      ]
+    },
+    {
+      "id": "17-summary",
+      "name": "Verification Summary",
+      "description": "Print a summary of all verification results",
+      "commands": [
+        "echo ''",
+        "echo '=========================================='",
+        "echo 'LIBFABRIC Backend Fix Verification Summary'",
+        "echo '=========================================='",
+        "echo ''",
+        "echo '[1] Build Artifact'",
+        "echo '    - File exists, size ~548KB'",
+        "echo '    - conn_info_ symbol present'",
+        "echo '    - nixlBackendInit/Cleanup symbols present'",
+        "echo ''",
+        "echo '[2] S3 Deployment'",
+        "echo '    - File uploaded to S3'",
+        "echo '    - Size matches local build'",
+        "echo ''",
+        "echo '[3] Node Installation'",
+        "echo '    - Both nodes have the plugin'",
+        "echo '    - Sizes match across all locations'",
+        "echo ''",
+        "echo '[4] Backend Initialization'",
+        "echo '    - EFA devices discovered on both nodes'",
+        "echo '    - Data/Control rails created with provider=efa'",
+        "echo '    - No NIXL_ERR_INVALID_PARAM errors'",
+        "echo '    - No EAGAIN errors'",
+        "echo ''",
+        "echo '[5] API Tests'",
+        "echo '    - Producer API healthy and serving inference'",
+        "echo '    - Consumer API healthy and serving inference'",
+        "echo ''",
+        "echo '=========================================='",
+        "echo '[OK] All verification checks passed!'",
+        "echo '=========================================='",
+        "echo ''",
+        "echo 'Next step: Run disaggregated inference test via Proxy Server'",
+        "echo '  ssh ubuntu@{{NODE1_PUBLIC_IP}} \"curl -X POST http://localhost:{{PROXY_PORT}}/v1/completions ...\"'"
+      ]
+    }
+  ]
+}

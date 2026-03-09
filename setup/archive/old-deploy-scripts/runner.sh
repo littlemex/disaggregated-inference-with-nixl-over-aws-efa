@@ -73,7 +73,7 @@ log ""
 TMP_DIR="/tmp/nixl-setup-$(date +%s)"
 
 log "[1/4] Creating temporary directory on remote instance..."
-aws ssm send-command \
+aws ssm send-command --region us-west-2 \
     --instance-ids "$INSTANCE_ID" \
     --document-name "AWS-RunShellScript" \
     --parameters "commands=[\"mkdir -p $TMP_DIR\"]" \
@@ -101,7 +101,7 @@ else
 fi
 
 # Upload files via SSM
-UPLOAD_CMD_ID=$(aws ssm send-command \
+UPLOAD_CMD_ID=$(aws ssm send-command --region us-west-2 \
     --instance-ids "$INSTANCE_ID" \
     --document-name "AWS-RunShellScript" \
     --parameters "commands=[
@@ -126,7 +126,7 @@ log "[OK] Files uploaded successfully"
 # Execute task_runner.sh
 log "[3/4] Executing task_runner.sh on remote instance..."
 
-EXEC_CMD_ID=$(aws ssm send-command \
+EXEC_CMD_ID=$(aws ssm send-command --region us-west-2 \
     --instance-ids "$INSTANCE_ID" \
     --document-name "AWS-RunShellScript" \
     --parameters "commands=[
@@ -153,13 +153,13 @@ fi
 # Get command output
 log "[4/4] Retrieving execution output..."
 
-OUTPUT=$(aws ssm get-command-invocation \
+OUTPUT=$(aws ssm get-command-invocation --region us-west-2 \
     --command-id "$EXEC_CMD_ID" \
     --instance-id "$INSTANCE_ID" \
     --query "StandardOutputContent" \
     --output text 2>/dev/null || echo "[No output]")
 
-ERROR_OUTPUT=$(aws ssm get-command-invocation \
+ERROR_OUTPUT=$(aws ssm get-command-invocation --region us-west-2 \
     --command-id "$EXEC_CMD_ID" \
     --instance-id "$INSTANCE_ID" \
     --query "StandardErrorContent" \
@@ -180,7 +180,7 @@ if [ -n "$ERROR_OUTPUT" ] && [ "$ERROR_OUTPUT" != "None" ]; then
 fi
 
 # Check final status
-STATUS=$(aws ssm get-command-invocation \
+STATUS=$(aws ssm get-command-invocation --region us-west-2 \
     --command-id "$EXEC_CMD_ID" \
     --instance-id "$INSTANCE_ID" \
     --query "Status" \
