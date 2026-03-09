@@ -1,0 +1,226 @@
+#!/bin/bash
+##
+## Complete NIXL Deployment Script (v8)
+## SSM + S3 based deployment - no SSH/scp required
+## Includes Proxy Server deployment for disaggregated inference
+##
+## Usage:
+##   ./deploy-v9.sh <config-file>
+##
+## Example:
+##   ./deploy-v9.sh configs/v7test-phase3-us-west-2.env
+##
+## This script automates the complete NIXL deployment using SSM and S3:
+##   1. Check prerequisites (libfabric-dev)
+##   2. Clone and build NIXL from GitHub
+##   3. Upload plugin and Proxy Server to S3
+##   4. Setup Producer node via SSM with vLLM + NIXL + kv-transfer-config
+##   5. Setup Consumer node via SSM with vLLM + NIXL + kv-transfer-config
+##   6. Deploy custom LIBFABRIC plugin via S3
+##   7. Deploy Proxy Server via S3
+##   8. Create and upload startup scripts via S3
+##
+
+set -euo pipefail
+
+# Load SSM helper functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/ssm_helper.sh"
+
+# Check arguments
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <config-file>"
+    echo ""
+    echo "Example:"
+    echo "  $0 configs/v7test-phase3-us-west-2.env"
+    echo ""
+    exit 1
+fi
+
+CONFIG_FILE="$1"
+
+# Check config file
+if [ ! -f "$CONFIG_FILE" ]; then
+    error "Config file not found: $CONFIG_FILE"
+fi
+
+# Load configuration
+log "Loading configuration from $CONFIG_FILE..."
+source "$CONFIG_FILE"
+
+# Validate required variables
+REQUIRED_VARS=(
+    "S3_BUCKET"
+    "AWS_REGION"
+    "NODE1_INSTANCE_ID"
+    "NODE2_INSTANCE_ID"
+    "NODE1_PRIVATE_IP"
+    "NODE2_PRIVATE_IP"
+    "DEPLOYMENT_ID"
+)
+
+for var in "${REQUIRED_VARS[@]}"; do
+    if [ -z "${!var:-}" ]; then
+        error "Required variable $var is not set in $CONFIG_FILE"
+    fi
+done
+
+success "Configuration loaded"
+
+# Display configuration
+echo ""
+echo "========================================="
+echo "Deployment Configuration (v9 - SSM + S3 + Proxy + Fixes)"
+echo "========================================="
+echo "S3 Bucket:      $S3_BUCKET"
+echo "AWS Region:     $AWS_REGION"
+echo "Deployment ID:  $DEPLOYMENT_ID"
+echo ""
+echo "Producer (Node1):"
+echo "  Instance ID:  $NODE1_INSTANCE_ID"
+echo "  Private IP:   $NODE1_PRIVATE_IP"
+echo "  Port:         ${PRODUCER_PORT:-8100}"
+echo ""
+echo "Consumer (Node2):"
+echo "  Instance ID:  $NODE2_INSTANCE_ID"
+echo "  Private IP:   $NODE2_PRIVATE_IP"
+echo "  Port:         ${CONSUMER_PORT:-8200}"
+echo ""
+echo "Proxy Server (Node2):"
+echo "  Port:         ${PROXY_PORT:-8000}"
+echo ""
+echo "Common ENGINE_ID: ${ENGINE_ID:-$DEPLOYMENT_ID}"
+echo "NIXL Port:        ${NIXL_PORT:-14579}"
+echo "ZMQ Port:         ${ZMQ_PORT:-50100}"
+echo ""
+
+# Confirm
+read -p "Proceed with deployment? (yes/no): " CONFIRM
+if [ "$CONFIRM" != "yes" ]; then
+    echo "Deployment cancelled."
+    exit 0
+fi
+
+# Detect GPU count on nodes for dynamic TP sizing
+log "Detecting GPU count on nodes..."
+source "${SCRIPT_DIR}/ssm_helper.sh"
+
+# Producer GPU count
+PROD_GPU_CMD_ID=$(ssm_run_command "${NODE1_INSTANCE_ID}" "${AWS_REGION}" "nvidia-smi --list-gpus | wc -l")
+sleep 3
+PRODUCER_GPU_COUNT=$(aws ssm get-command-invocation \
+    --command-id "${PROD_GPU_CMD_ID}" \
+    --instance-id "${NODE1_INSTANCE_ID}" \
+    --region "${AWS_REGION}" \
+    --query 'StandardOutputContent' \
+    --output text | tr -d '\n' | tr -d ' ')
+
+# Consumer GPU count
+CONS_GPU_CMD_ID=$(ssm_run_command "${NODE2_INSTANCE_ID}" "${AWS_REGION}" "nvidia-smi --list-gpus | wc -l")
+sleep 3
+CONSUMER_GPU_COUNT=$(aws ssm get-command-invocation \
+    --command-id "${CONS_GPU_CMD_ID}" \
+    --instance-id "${NODE2_INSTANCE_ID}" \
+    --region "${AWS_REGION}" \
+    --query 'StandardOutputContent' \
+    --output text | tr -d '\n' | tr -d ' ')
+
+success "GPU detection complete: Producer=${PRODUCER_GPU_COUNT}, Consumer=${CONSUMER_GPU_COUNT}"
+
+# Use detected GPU count as default TP size (can be overridden by config)
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-${PRODUCER_GPU_COUNT}}"
+
+# Export environment variables for task runner
+export PRODUCER_GPU_COUNT="${PRODUCER_GPU_COUNT}"
+export CONSUMER_GPU_COUNT="${CONSUMER_GPU_COUNT}"
+export S3_BUCKET="${S3_BUCKET}"
+export AWS_REGION="${AWS_REGION}"
+export NODE1_INSTANCE_ID="${NODE1_INSTANCE_ID}"
+export NODE2_INSTANCE_ID="${NODE2_INSTANCE_ID}"
+export NODE1_PRIVATE_IP="${NODE1_PRIVATE_IP}"
+export NODE2_PRIVATE_IP="${NODE2_PRIVATE_IP}"
+export DEPLOYMENT_ID="${DEPLOYMENT_ID}"
+export NIXL_REPO="${NIXL_REPO:-https://github.com/littlemex/nixl.git}"
+export NIXL_BRANCH="${NIXL_BRANCH:-main}"
+export NIXL_CLONE_DIR="${NIXL_CLONE_DIR:-/tmp/nixl-build}"
+export BUILD_SUBDIR="${BUILD_SUBDIR:-build}"
+export PLUGIN_RELATIVE_PATH="${PLUGIN_RELATIVE_PATH:-src/plugins/libfabric/libplugin_LIBFABRIC.so}"
+export S3_PLUGIN_KEY="${S3_PLUGIN_KEY:-plugins/libplugin_LIBFABRIC.so}"
+export S3_PROXY_KEY="${S3_PROXY_KEY:-scripts/disagg_proxy_server.py}"
+export REMOTE_USER="${REMOTE_USER:-ubuntu}"
+export ENGINE_ID="${ENGINE_ID:-$DEPLOYMENT_ID}"
+export MODEL_NAME="${MODEL_NAME:-Qwen/Qwen2.5-32B-Instruct}"
+export TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
+export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.9}"
+export MAX_MODEL_LEN="${MAX_MODEL_LEN:-32000}"
+export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
+export KV_BUFFER_SIZE="${KV_BUFFER_SIZE:-5000000000}"
+export KV_BUFFER_DEVICE="${KV_BUFFER_DEVICE:-cpu}"
+export NIXL_PORT="${NIXL_PORT:-14579}"
+export ZMQ_PORT="${ZMQ_PORT:-50100}"
+export PRODUCER_PORT="${PRODUCER_PORT:-8100}"
+export CONSUMER_PORT="${CONSUMER_PORT:-8200}"
+export PROXY_PORT="${PROXY_PORT:-8000}"
+
+# Run deployment
+TASK_FILE="$SCRIPT_DIR/tasks/complete-deployment-v9.json"
+
+if [ ! -f "$TASK_FILE" ]; then
+    error "Task file not found: $TASK_FILE"
+fi
+
+log "Starting deployment..."
+bash "$SCRIPT_DIR/task_runner.sh" "$TASK_FILE"
+
+success "Deployment complete!"
+echo ""
+echo "========================================="
+echo "Startup Instructions"
+echo "========================================="
+echo ""
+echo "IMPORTANT: Start services in the following order:"
+echo ""
+echo "1. Start Producer (Node1):"
+echo "   aws ssm send-command --instance-ids $NODE1_INSTANCE_ID \\"
+echo "     --document-name AWS-RunShellScript \\"
+echo "     --parameters 'commands=[\"./start_producer.sh\"]' \\"
+echo "     --region $AWS_REGION"
+echo ""
+echo "2. Wait for Producer to start (check port 8100 listening)"
+echo ""
+echo "3. Start Consumer (Node2):"
+echo "   aws ssm send-command --instance-ids $NODE2_INSTANCE_ID \\"
+echo "     --document-name AWS-RunShellScript \\"
+echo "     --parameters 'commands=[\"./start_consumer.sh\"]' \\"
+echo "     --region $AWS_REGION"
+echo ""
+echo "4. Wait for Consumer to start (check port 8200 listening)"
+echo ""
+echo "5. Start Proxy Server (Node2):"
+echo "   aws ssm send-command --instance-ids $NODE2_INSTANCE_ID \\"
+echo "     --document-name AWS-RunShellScript \\"
+echo "     --parameters 'commands=[\"./start_proxy.sh\"]' \\"
+echo "     --region $AWS_REGION"
+echo ""
+echo "========================================="
+echo "Monitor Logs"
+echo "========================================="
+echo ""
+echo "Producer:"
+echo "  aws ssm send-command --instance-ids $NODE1_INSTANCE_ID \\"
+echo "    --document-name AWS-RunShellScript \\"
+echo "    --parameters 'commands=[\"tail -n 50 producer.log\"]' \\"
+echo "    --region $AWS_REGION"
+echo ""
+echo "Consumer:"
+echo "  aws ssm send-command --instance-ids $NODE2_INSTANCE_ID \\"
+echo "    --document-name AWS-RunShellScript \\"
+echo "    --parameters 'commands=[\"tail -n 50 consumer.log\"]' \\"
+echo "    --region $AWS_REGION"
+echo ""
+echo "Proxy Server:"
+echo "  aws ssm send-command --instance-ids $NODE2_INSTANCE_ID \\"
+echo "    --document-name AWS-RunShellScript \\"
+echo "    --parameters 'commands=[\"tail -n 50 proxy.log\"]' \\"
+echo "    --region $AWS_REGION"
+echo ""

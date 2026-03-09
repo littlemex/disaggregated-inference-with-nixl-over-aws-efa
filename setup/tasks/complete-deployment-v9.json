@@ -1,0 +1,435 @@
+{
+  "name": "Complete NIXL LIBFABRIC Deployment - v9 (SSM + S3 + Proxy + Fixes)",
+  "description": "SSM + S3 \u3092\u4f7f\u7528\u3057\u305f\u5b8c\u5168\u81ea\u52d5\u5316\u30c7\u30d7\u30ed\u30a4\u30e1\u30f3\u30c8\u3002SSH/scp \u3092\u4f7f\u308f\u305a\u3001SSM send-command \u3068 S3 \u7d4c\u7531\u3067\u30d5\u30a1\u30a4\u30eb\u8ee2\u9001\u3002Phase 3 \u6210\u529f\u30d1\u30bf\u30fc\u30f3\u5b8c\u5168\u518d\u73fe + Opus 4.6 \u30ec\u30d3\u30e5\u30fc\u6307\u6458\u4e8b\u9805\u5bfe\u5fdc\uff08Producer NIXL_PLUGIN_DIR\u3001FI_PROVIDER=efa\u3001engine_id \u660e\u793a\u8a2d\u5b9a\uff09\u3002",
+  "environment": {
+    "NIXL_REPO": "${NIXL_REPO:-https://github.com/littlemex/nixl.git}",
+    "NIXL_BRANCH": "${NIXL_BRANCH:-main}",
+    "NIXL_CLONE_DIR": "${NIXL_CLONE_DIR:-/tmp/nixl-build}",
+    "BUILD_SUBDIR": "${BUILD_SUBDIR:-build}",
+    "PLUGIN_RELATIVE_PATH": "${PLUGIN_RELATIVE_PATH:-src/plugins/libfabric/libplugin_LIBFABRIC.so}",
+    "S3_BUCKET": "${S3_BUCKET}",
+    "S3_PLUGIN_KEY": "${S3_PLUGIN_KEY:-plugins/libplugin_LIBFABRIC.so}",
+    "S3_PROXY_KEY": "${S3_PROXY_KEY:-scripts/disagg_proxy_server.py}",
+    "AWS_REGION": "${AWS_REGION}",
+    "NODE1_INSTANCE_ID": "${NODE1_INSTANCE_ID}",
+    "NODE2_INSTANCE_ID": "${NODE2_INSTANCE_ID}",
+    "NODE1_PRIVATE_IP": "${NODE1_PRIVATE_IP}",
+    "NODE2_PRIVATE_IP": "${NODE2_PRIVATE_IP}",
+    "DEPLOYMENT_ID": "${DEPLOYMENT_ID:-nixl-efa-deployment}",
+    "ENGINE_ID": "${ENGINE_ID:-nixl-efa-deployment}",
+    "PRODUCER_PORT": "${PRODUCER_PORT:-8100}",
+    "CONSUMER_PORT": "${CONSUMER_PORT:-8200}",
+    "PROXY_PORT": "${PROXY_PORT:-8000}",
+    "NIXL_PORT": "${NIXL_PORT:-14579}",
+    "ZMQ_PORT": "${ZMQ_PORT:-50100}",
+    "REMOTE_USER": "${REMOTE_USER:-ubuntu}",
+    "MODEL_NAME": "${MODEL_NAME:-Qwen/Qwen2.5-32B-Instruct}",
+    "TENSOR_PARALLEL_SIZE": "${TENSOR_PARALLEL_SIZE:-2}",
+    "GPU_MEMORY_UTILIZATION": "${GPU_MEMORY_UTILIZATION:-0.9}",
+    "MAX_MODEL_LEN": "${MAX_MODEL_LEN:-32000}",
+    "MAX_NUM_BATCHED_TOKENS": "${MAX_NUM_BATCHED_TOKENS:-8192}",
+    "KV_BUFFER_SIZE": "${KV_BUFFER_SIZE:-5000000000}",
+    "KV_BUFFER_DEVICE": "${KV_BUFFER_DEVICE:-cpu}"
+  },
+  "tasks": [
+    {
+      "id": "00-check-libfabric-dev",
+      "name": "Check libfabric-dev installation",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking libfabric-dev installation...'",
+        "if ! dpkg -l | grep -q libfabric-dev; then echo '[ERROR] libfabric-dev is not installed. Install with: sudo apt-get install -y libfabric-dev'; exit 1; fi",
+        "echo '[OK] libfabric-dev is installed'"
+      ]
+    },
+    {
+      "id": "01-check-local-prerequisites",
+      "name": "Check local prerequisites",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Checking local prerequisites...'",
+        "command -v git >/dev/null 2>&1 || { echo '[ERROR] git not found'; exit 1; }",
+        "command -v ninja >/dev/null 2>&1 || { echo '[ERROR] ninja not found'; exit 1; }",
+        "command -v meson >/dev/null 2>&1 || { echo '[ERROR] meson not found'; exit 1; }",
+        "command -v aws >/dev/null 2>&1 || { echo '[ERROR] aws CLI not found'; exit 1; }",
+        "echo '[OK] All prerequisites satisfied'"
+      ]
+    },
+    {
+      "id": "02-clone-nixl-from-github",
+      "name": "Clone NIXL from GitHub",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Cloning NIXL from GitHub...'",
+        "if [ -d \"${NIXL_CLONE_DIR}/.git\" ]; then cd \"${NIXL_CLONE_DIR}\" && git fetch origin && git checkout ${NIXL_BRANCH} && git pull origin ${NIXL_BRANCH}; else rm -rf \"${NIXL_CLONE_DIR}\" && git clone \"${NIXL_REPO}\" \"${NIXL_CLONE_DIR}\" && cd \"${NIXL_CLONE_DIR}\" && git checkout ${NIXL_BRANCH}; fi",
+        "cd \"${NIXL_CLONE_DIR}\" && git log --oneline -1",
+        "echo '[OK] NIXL source ready'"
+      ]
+    },
+    {
+      "id": "03-verify-request-response-protocol",
+      "name": "Verify Request/Response protocol",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying Request/Response protocol...'",
+        "grep -q 'loadRemoteConnInfo' \"${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.h\" || { echo '[ERROR] loadRemoteConnInfo not found'; exit 1; }",
+        "grep -q 'remote_conn_info' \"${NIXL_CLONE_DIR}/src/plugins/libfabric/libfabric_backend.cpp\" || { echo '[ERROR] remote_conn_info not found'; exit 1; }",
+        "echo '[OK] Request/Response protocol verified'"
+      ]
+    },
+    {
+      "id": "04-setup-meson-build",
+      "name": "Setup meson build",
+      "skip_if": "test -f ${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/build.ninja",
+      "commands": [
+        "echo '[INFO] Setting up meson build...'",
+        "cd \"${NIXL_CLONE_DIR}\" && PKG_CONFIG_PATH=/opt/amazon/efa/lib/pkgconfig:$PKG_CONFIG_PATH meson setup ${BUILD_SUBDIR} --prefix=/usr/local",
+        "echo '[OK] Meson configured'"
+      ]
+    },
+    {
+      "id": "05-build-nixl-plugin",
+      "name": "Build NIXL plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Building NIXL plugin...'",
+        "cd \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}\" && PKG_CONFIG_PATH=/opt/amazon/efa/lib/pkgconfig:$PKG_CONFIG_PATH ninja",
+        "test -f \"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\" || { echo '[ERROR] Build failed'; exit 1; }",
+        "echo '[OK] Plugin built'"
+      ]
+    },
+    {
+      "id": "06-verify-plugin",
+      "name": "Verify plugin artifact",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Verifying plugin...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\"",
+        "SO_SIZE_KB=$(($(stat -c '%s' \"${PLUGIN_PATH}\") / 1024))",
+        "echo \"[OK] Size: ${SO_SIZE_KB} KB\"",
+        "file \"${PLUGIN_PATH}\" | grep -q 'ELF.*shared object' || { echo '[ERROR] Invalid ELF'; exit 1; }",
+        "echo '[OK] Plugin verified'"
+      ]
+    },
+    {
+      "id": "07-upload-plugin-to-s3",
+      "name": "Upload plugin to S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Uploading plugin to S3...'",
+        "PLUGIN_PATH=\"${NIXL_CLONE_DIR}/${BUILD_SUBDIR}/${PLUGIN_RELATIVE_PATH}\" && aws s3 cp \"${PLUGIN_PATH}\" \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION}",
+        "aws s3 ls \"s3://${S3_BUCKET}/${S3_PLUGIN_KEY}\" --region ${AWS_REGION} || { echo '[ERROR] Upload failed'; exit 1; }",
+        "echo '[OK] Plugin uploaded to S3'"
+      ]
+    },
+    {
+      "id": "07b-upload-proxy-to-s3",
+      "name": "Upload Proxy Server script to S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Uploading Proxy Server to S3...'",
+        "PROXY_SCRIPT=\"../experiments/scripts/disagg_proxy_server.py\" && test -f \"${PROXY_SCRIPT}\" && aws s3 cp \"${PROXY_SCRIPT}\" \"s3://${S3_BUCKET}/${S3_PROXY_KEY}\" --region ${AWS_REGION}",
+        "aws s3 ls \"s3://${S3_BUCKET}/${S3_PROXY_KEY}\" --region ${AWS_REGION} || { echo '[ERROR] Upload failed'; exit 1; }",
+        "echo '[OK] Proxy Server uploaded to S3'"
+      ]
+    },
+    {
+      "id": "07c-upload-scripts-to-s3",
+      "name": "Upload deployment scripts to S3",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Uploading deployment scripts to S3...'",
+        "aws s3 cp scripts/ \"s3://${S3_BUCKET}/scripts/\" --recursive --region ${AWS_REGION} --exclude '*.md'",
+        "aws s3 cp templates/ \"s3://${S3_BUCKET}/templates/\" --recursive --region ${AWS_REGION}",
+        "echo '[OK] Deployment scripts uploaded to S3'"
+      ]
+    },
+    {
+      "id": "08-check-ssm-connectivity",
+      "name": "Check SSM connectivity",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Testing SSM connectivity...'",
+        "source ./ssm_helper.sh",
+        "COMMAND_ID=$(ssm_run_command \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'echo [OK] Node1')",
+        "ssm_wait_command \"${COMMAND_ID}\" \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 30",
+        "COMMAND_ID=$(ssm_run_command \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'echo [OK] Node2')",
+        "ssm_wait_command \"${COMMAND_ID}\" \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 30",
+        "echo '[OK] SSM connectivity verified'"
+      ]
+    },
+    {
+      "id": "08a-producer-gpu-cleanup",
+      "name": "Producer: GPU cleanup",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Cleaning up GPU processes...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/cleanup-gpu.sh /tmp/cleanup-gpu.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'bash /tmp/cleanup-gpu.sh && rm -f /tmp/cleanup-gpu.sh /tmp/common.sh' 60",
+        "echo '[OK] Producer GPU cleanup complete'"
+      ]
+    },
+    {
+      "id": "08b-consumer-gpu-cleanup",
+      "name": "Consumer: GPU cleanup",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Cleaning up GPU processes...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/cleanup-gpu.sh /tmp/cleanup-gpu.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'bash /tmp/cleanup-gpu.sh && rm -f /tmp/cleanup-gpu.sh /tmp/common.sh' 60",
+        "echo '[OK] Consumer GPU cleanup complete'"
+      ]
+    },
+    {
+      "id": "09-producer-install-vllm",
+      "name": "Producer: Install vLLM",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Installing vLLM v0.17.0...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/install-vllm.sh /tmp/install-vllm.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /tmp/install-vllm.sh && VLLM_VERSION=0.17.0 bash /tmp/install-vllm.sh && rm -f /tmp/install-vllm.sh /tmp/common.sh' 600",
+        "echo '[OK] vLLM installed on Producer'"
+      ]
+    },
+    {
+      "id": "10-producer-install-nixl",
+      "name": "Producer: Install NIXL",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Installing NIXL v0.10.0...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/install-nixl.sh /tmp/install-nixl.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /tmp/install-nixl.sh && NIXL_VERSION=0.10.0 bash /tmp/install-nixl.sh && rm -f /tmp/install-nixl.sh /tmp/common.sh' 600",
+        "echo '[OK] NIXL installed on Producer'"
+      ]
+    },
+    {
+      "id": "11-producer-deploy-plugin",
+      "name": "Producer: Deploy LIBFABRIC plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Deploying LIBFABRIC plugin...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/deploy-plugin.sh /tmp/deploy-plugin.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "DEPLOY_CMD=\"chmod +x /tmp/deploy-plugin.sh && S3_BUCKET=${S3_BUCKET} AWS_REGION=${AWS_REGION} S3_PLUGIN_KEY=${S3_PLUGIN_KEY} bash /tmp/deploy-plugin.sh && rm -f /tmp/deploy-plugin.sh /tmp/common.sh\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DEPLOY_CMD}\" 120",
+        "echo '[OK] Plugin deployed on Producer'"
+      ]
+    },
+    {
+      "id": "12-producer-create-kv-config",
+      "name": "Producer: Create and upload kv-transfer-config",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Creating kv-transfer-config...'",
+        "mkdir -p /tmp/nixl-v9-producer-config",
+        "envsubst < templates/kv_config_producer.json.template > /tmp/nixl-v9-producer-config/kv_config.json",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-producer-config/kv_config.json \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node1/kv_config.json\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node1/kv_config.json\" \"/home/${REMOTE_USER}/kv_config.json\"",
+        "echo '[OK] kv-transfer-config uploaded to Producer'"
+      ]
+    },
+    {
+      "id": "13-producer-create-startup-script",
+      "name": "Producer: Create and upload startup script",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Creating startup script...'",
+        "export REMOTE_USER=${REMOTE_USER}",
+        "export TENSOR_PARALLEL_SIZE=${PRODUCER_GPU_COUNT}",
+        "envsubst < templates/start_producer.sh.template > /tmp/nixl-v9-producer-config/start_producer.sh",
+        "chmod +x /tmp/nixl-v9-producer-config/start_producer.sh",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-producer-config/start_producer.sh \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node1/start_producer.sh\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node1/start_producer.sh\" \"/home/${REMOTE_USER}/start_producer.sh\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /home/ubuntu/start_producer.sh' 30",
+        "echo '[OK] Startup script uploaded to Producer'"
+      ]
+    },
+    {
+      "id": "14-producer-verify",
+      "name": "Producer: Verify setup",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Producer: Verifying setup...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/verify-setup.sh /tmp/verify-setup.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /tmp/verify-setup.sh && bash /tmp/verify-setup.sh && rm -f /tmp/verify-setup.sh /tmp/common.sh' 60",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'test -f /home/ubuntu/kv_config.json && echo kv_config.json exists' 30",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'test -x /home/ubuntu/start_producer.sh && echo start_producer.sh is executable' 30",
+        "echo '[SUCCESS] Producer setup complete'"
+      ]
+    },
+    {
+      "id": "15-consumer-install-vllm",
+      "name": "Consumer: Install vLLM",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Installing vLLM v0.17.0...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/install-vllm.sh /tmp/install-vllm.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /tmp/install-vllm.sh && VLLM_VERSION=0.17.0 bash /tmp/install-vllm.sh && rm -f /tmp/install-vllm.sh /tmp/common.sh' 600",
+        "echo '[OK] vLLM installed on Consumer'"
+      ]
+    },
+    {
+      "id": "16-consumer-install-nixl",
+      "name": "Consumer: Install NIXL",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Installing NIXL v0.10.0...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/install-nixl.sh /tmp/install-nixl.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /tmp/install-nixl.sh && NIXL_VERSION=0.10.0 bash /tmp/install-nixl.sh && rm -f /tmp/install-nixl.sh /tmp/common.sh' 600",
+        "echo '[OK] NIXL installed on Consumer'"
+      ]
+    },
+    {
+      "id": "17-consumer-deploy-plugin",
+      "name": "Consumer: Deploy LIBFABRIC plugin",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Deploying LIBFABRIC plugin...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/deploy-plugin.sh /tmp/deploy-plugin.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "DEPLOY_CMD=\"chmod +x /tmp/deploy-plugin.sh && S3_BUCKET=${S3_BUCKET} AWS_REGION=${AWS_REGION} S3_PLUGIN_KEY=${S3_PLUGIN_KEY} bash /tmp/deploy-plugin.sh && rm -f /tmp/deploy-plugin.sh /tmp/common.sh\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DEPLOY_CMD}\" 120",
+        "echo '[OK] Plugin deployed on Consumer'"
+      ]
+    },
+    {
+      "id": "18-consumer-create-kv-config",
+      "name": "Consumer: Create and upload kv-transfer-config",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Creating kv-transfer-config...'",
+        "mkdir -p /tmp/nixl-v9-consumer-config",
+        "envsubst < templates/kv_config_consumer.json.template > /tmp/nixl-v9-consumer-config/kv_config.json",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-consumer-config/kv_config.json \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2/kv_config.json\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2/kv_config.json\" \"/home/${REMOTE_USER}/kv_config.json\"",
+        "echo '[OK] kv-transfer-config uploaded to Consumer'"
+      ]
+    },
+    {
+      "id": "19-consumer-create-startup-script",
+      "name": "Consumer: Create and upload startup script",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Creating startup script...'",
+        "export REMOTE_USER=${REMOTE_USER}",
+        "export TENSOR_PARALLEL_SIZE=${CONSUMER_GPU_COUNT}",
+        "envsubst < templates/start_consumer.sh.template > /tmp/nixl-v9-consumer-config/start_consumer.sh",
+        "chmod +x /tmp/nixl-v9-consumer-config/start_consumer.sh",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-consumer-config/start_consumer.sh \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2/start_consumer.sh\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2/start_consumer.sh\" \"/home/${REMOTE_USER}/start_consumer.sh\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /home/ubuntu/start_consumer.sh' 30",
+        "echo '[OK] Startup script uploaded to Consumer'"
+      ]
+    },
+    {
+      "id": "20-consumer-verify",
+      "name": "Consumer: Verify setup",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Verifying setup...'",
+        "source ./ssm_helper.sh",
+        "DOWNLOAD_CMD=\"aws s3 cp s3://${S3_BUCKET}/scripts/verify-setup.sh /tmp/verify-setup.sh --region ${AWS_REGION} --quiet && aws s3 cp s3://${S3_BUCKET}/scripts/common.sh /tmp/common.sh --region ${AWS_REGION} --quiet\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${DOWNLOAD_CMD}\" 60",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /tmp/verify-setup.sh && bash /tmp/verify-setup.sh && rm -f /tmp/verify-setup.sh /tmp/common.sh' 60",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'test -f /home/ubuntu/kv_config.json && echo kv_config.json exists' 30",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'test -x /home/ubuntu/start_consumer.sh && echo start_consumer.sh is executable' 30",
+        "echo '[SUCCESS] Consumer setup complete'"
+      ]
+    },
+    {
+      "id": "21-consumer-deploy-proxy",
+      "name": "Consumer: Deploy Proxy Server",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Deploying Proxy Server...'",
+        "source ./ssm_helper.sh",
+        "ssm_download_from_s3 \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"${S3_PROXY_KEY}\" \"/home/${REMOTE_USER}/disagg_proxy_server.py\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /home/ubuntu/disagg_proxy_server.py && ls -lh /home/ubuntu/disagg_proxy_server.py' 30",
+        "echo '[OK] Proxy Server deployed on Consumer'"
+      ]
+    },
+    {
+      "id": "22-consumer-install-aiohttp",
+      "name": "Consumer: Install aiohttp for Proxy Server",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Installing aiohttp...'",
+        "source ./ssm_helper.sh",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'bash -c \\\". /opt/pytorch/bin/activate && python3 -m pip install --no-cache-dir aiohttp -q && python3 -c \\\\\\\"import aiohttp\\\\\\\"\\\"' 300",
+        "echo '[OK] aiohttp installed on Consumer'"
+      ]
+    },
+    {
+      "id": "23-consumer-create-proxy-startup-script",
+      "name": "Consumer: Create Proxy Server startup script",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Consumer: Creating Proxy Server startup script...'",
+        "export REMOTE_USER=${REMOTE_USER}",
+        "envsubst < templates/start_proxy.sh.template > /tmp/nixl-v9-consumer-config/start_proxy.sh",
+        "chmod +x /tmp/nixl-v9-consumer-config/start_proxy.sh",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-consumer-config/start_proxy.sh \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2/start_proxy.sh\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2/start_proxy.sh\" \"/home/${REMOTE_USER}/start_proxy.sh\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /home/ubuntu/start_proxy.sh' 30",
+        "echo '[OK] Proxy Server startup script uploaded'"
+      ]
+    },
+    {
+      "id": "24-summary",
+      "name": "Display summary",
+      "skip_if": "",
+      "commands": [
+        "echo ''",
+        "echo '========================================='",
+        "echo 'Deployment Complete (v8 - SSM + S3 + Proxy)'",
+        "echo '========================================='",
+        "echo ''",
+        "echo 'Producer (Node1): Instance ${NODE1_INSTANCE_ID}'",
+        "echo '  Private IP:   ${NODE1_PRIVATE_IP}'",
+        "echo '  ENGINE_ID:    ${ENGINE_ID}'",
+        "echo '  Start:        aws ssm send-command --instance-ids ${NODE1_INSTANCE_ID} --document-name AWS-RunShellScript --parameters \"commands=[./start_producer.sh]\" --region ${AWS_REGION}'",
+        "echo ''",
+        "echo 'Consumer (Node2): Instance ${NODE2_INSTANCE_ID}'",
+        "echo '  Private IP:   ${NODE2_PRIVATE_IP}'",
+        "echo '  ENGINE_ID:    ${ENGINE_ID}'",
+        "echo '  Start:        aws ssm send-command --instance-ids ${NODE2_INSTANCE_ID} --document-name AWS-RunShellScript --parameters \"commands=[./start_consumer.sh]\" --region ${AWS_REGION}'",
+        "echo ''",
+        "echo 'Proxy Server (Node2): Port ${PROXY_PORT}'",
+        "echo '  NOTE: Start Proxy Server AFTER Producer and Consumer are running'",
+        "echo '  Start:        aws ssm send-command --instance-ids ${NODE2_INSTANCE_ID} --document-name AWS-RunShellScript --parameters \"commands=[./start_proxy.sh]\" --region ${AWS_REGION}'",
+        "echo ''",
+        "echo 'Startup Order:'",
+        "echo '  1. Start Producer (wait for port 8100 listening)'",
+        "echo '  2. Start Consumer (wait for port 8200 listening)'",
+        "echo '  3. Start Proxy Server (port 8000)'",
+        "echo ''",
+        "echo 'Monitor logs via SSM:'",
+        "echo '  Producer: aws ssm send-command --instance-ids ${NODE1_INSTANCE_ID} --document-name AWS-RunShellScript --parameters \"commands=[tail -n 50 producer.log]\" --region ${AWS_REGION}'",
+        "echo '  Consumer: aws ssm send-command --instance-ids ${NODE2_INSTANCE_ID} --document-name AWS-RunShellScript --parameters \"commands=[tail -n 50 consumer.log]\" --region ${AWS_REGION}'",
+        "echo '  Proxy:    aws ssm send-command --instance-ids ${NODE2_INSTANCE_ID} --document-name AWS-RunShellScript --parameters \"commands=[tail -n 50 proxy.log]\" --region ${AWS_REGION}'",
+        "echo ''"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "engine_id": "${ENGINE_ID}",
+  "kv_connector": "NixlConnector",
+  "kv_role": "kv_producer",
+  "kv_rank": 0,
+  "kv_parallel_size": 1,
+  "kv_buffer_size": ${KV_BUFFER_SIZE},
+  "kv_buffer_device": "${KV_BUFFER_DEVICE}",
+  "kv_ip": "${NODE1_PRIVATE_IP}",
+  "kv_port": ${NIXL_PORT},
+  "kv_connector_extra_config": {
+    "backends": ["LIBFABRIC"]
+  }
+}

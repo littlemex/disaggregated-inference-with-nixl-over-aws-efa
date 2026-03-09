@@ -93,8 +93,11 @@ export interface NixlEfaStackProps extends StackProps {
   /** Availability zone. If not specified, uses the first AZ in the region. */
   availabilityZone?: string;
 
-  /** VPC ID. If not specified, uses the default VPC. */
+  /** VPC ID. If not specified, uses the default VPC or creates a new one if createVpc is true. */
   vpcId?: string;
+
+  /** Create a new VPC if vpcId is not specified and default VPC doesn't exist. Defaults to false. */
+  createVpc?: boolean;
 
   /** MLflow Tracking Server ARN (optional). */
   mlflowTrackingServerArn?: string;
@@ -127,6 +130,7 @@ export class NixlEfaStack extends Stack {
       vllmPort = 8100,
       availabilityZone,
       vpcId,
+      createVpc = false,
       mlflowTrackingServerArn,
       mlflowArtifactBucketArn,
       useCapacityBlock,
@@ -152,24 +156,22 @@ export class NixlEfaStack extends Stack {
       );
     }
 
-    // --- VPC ---
-    this.vpc = vpcId
-      ? ec2.Vpc.fromLookup(this, "Vpc", { vpcId })
-      : ec2.Vpc.fromLookup(this, "DefaultVpc", { isDefault: true });
-
     // --- Availability Zone ---
-    const az = availabilityZone || this.vpc.availabilityZones[0];
+    const az = availabilityZone;
+
+    // --- VPC ---
+    this.vpc = this.resolveVpc(vpcId, createVpc, az);
 
     // --- AMI: Deep Learning OSS Nvidia Driver AMI ---
     const ami = ec2.MachineImage.lookup({
-      name: "Deep Learning OSS Nvidia Driver AMI GPU PyTorch * (Ubuntu 22.04) *",
+      name: "Deep Learning OSS Nvidia Driver AMI GPU PyTorch * (Ubuntu 24.04) *",
       owners: ["amazon"],
     });
 
     // --- Security Group ---
-    this.securityGroup = new ec2.SecurityGroup(this, "NixlEfaSecurityGroup", {
+    this.securityGroup = new ec2.SecurityGroup(this, "TestSecurityGroup", {
       vpc: this.vpc,
-      description: "Security group for NIXL EFA experiments",
+      description: "Security group for GPU cluster experiments",
       allowAllOutbound: true,
     });
 
@@ -205,7 +207,7 @@ export class NixlEfaStack extends Stack {
     );
 
     // --- Placement Group ---
-    this.placementGroup = new ec2.CfnPlacementGroup(this, "NixlClusterPlacementGroup", {
+    this.placementGroup = new ec2.CfnPlacementGroup(this, "TestClusterPlacementGroup", {
       strategy: "cluster",
     });
 
@@ -219,9 +221,9 @@ export class NixlEfaStack extends Stack {
     });
 
     // --- IAM Role for EC2 with SSM ---
-    const ec2Role = new iam.Role(this, "NixlEfaInstanceRole", {
+    const ec2Role = new iam.Role(this, "TestInstanceRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
-      description: "IAM role for NIXL EFA EC2 instances with SSM, S3, and SageMaker MLflow access",
+      description: "IAM role for GPU cluster EC2 instances with SSM, S3, and SageMaker MLflow access",
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore"),
       ],
@@ -298,7 +300,7 @@ export class NixlEfaStack extends Stack {
       );
     }
 
-    const instanceProfile = new iam.CfnInstanceProfile(this, "NixlEfaInstanceProfile", {
+    const instanceProfile = new iam.CfnInstanceProfile(this, "TestInstanceProfile", {
       roles: [ec2Role.roleName],
     });
 
@@ -340,18 +342,29 @@ export class NixlEfaStack extends Stack {
     }
 
     // --- Subnet ---
+    // Get actual AZ to use (specified or first available)
+    const actualAz = az || this.vpc.availabilityZones[0];
+
     // Select subnet in the specified AZ
-    // If no AZ is specified, CDK will select the first available subnet
-    const subnetSelection = availabilityZone
+    const subnetSelection = az
       ? {
-          availabilityZones: [az],
+          availabilityZones: [actualAz],
           onePerAz: true,
         }
       : {
           onePerAz: true,
         };
 
-    const subnet = this.vpc.selectSubnets(subnetSelection).subnets[0];
+    const selectedSubnets = this.vpc.selectSubnets(subnetSelection).subnets;
+
+    if (selectedSubnets.length === 0) {
+      throw new Error(
+        `No subnets found in VPC ${this.vpc.vpcId} for AZ ${actualAz}. ` +
+        `Available AZs: ${this.vpc.availabilityZones.join(", ")}`
+      );
+    }
+
+    const subnet = selectedSubnets[0];
 
     // --- EFA Network Interface: Node 1 ---
     const node1Efa = new ec2.CfnNetworkInterface(this, "Node1EfaInterface", {
@@ -375,7 +388,7 @@ export class NixlEfaStack extends Stack {
       instanceType,
       keyName,
       placementGroupName: this.placementGroup.ref,
-      availabilityZone: az,
+      availabilityZone: actualAz,
       iamInstanceProfile: instanceProfile.ref,
       networkInterfaces: [
         {
@@ -425,7 +438,7 @@ export class NixlEfaStack extends Stack {
       instanceType,
       keyName,
       placementGroupName: this.placementGroup.ref,
-      availabilityZone: az,
+      availabilityZone: actualAz,
       iamInstanceProfile: instanceProfile.ref,
       networkInterfaces: [
         {
@@ -523,5 +536,46 @@ export class NixlEfaStack extends Stack {
       description: "Placement group name",
       exportName: `${this.stackName}-PlacementGroupName`,
     });
+  }
+
+  /**
+   * Resolve VPC: use existing VPC, create new one, or lookup default VPC
+   */
+  private resolveVpc(vpcId?: string, createVpc?: boolean, az?: string): ec2.IVpc {
+    if (vpcId) {
+      return ec2.Vpc.fromLookup(this, "ExistingVpc", { vpcId });
+    }
+
+    if (createVpc) {
+      // When creating a new VPC, specify AZs if provided
+      const vpcConfig: ec2.VpcProps = az
+        ? {
+            availabilityZones: [az], // Specify exact AZ (cannot use maxAzs with availabilityZones)
+            natGateways: 0,
+            subnetConfiguration: [
+              {
+                cidrMask: 24,
+                name: "Public",
+                subnetType: ec2.SubnetType.PUBLIC,
+              },
+            ],
+          }
+        : {
+            maxAzs: 2, // Use first 2 AZs in region (cannot use availabilityZones with maxAzs)
+            natGateways: 0,
+            subnetConfiguration: [
+              {
+                cidrMask: 24,
+                name: "Public",
+                subnetType: ec2.SubnetType.PUBLIC,
+              },
+            ],
+          };
+
+      return new ec2.Vpc(this, "TestVpc", vpcConfig);
+    }
+
+    // Default: look up the default VPC
+    return ec2.Vpc.fromLookup(this, "DefaultVpc", { isDefault: true });
   }
 }

@@ -35,7 +35,7 @@ function getStackName(
 
   // 3. Environment-based naming (standard)
   const environment = app.node.tryGetContext("environment") || defaultEnvironment;
-  const region = process.env.CDK_DEFAULT_REGION || "us-west-2";
+  const region = app.node.tryGetContext("region") || process.env.CDK_DEFAULT_REGION || "us-west-2";
 
   // Shorten region name for brevity (us-west-2 -> west-2)
   const regionShort = region.replace(/^(us|eu|ap|ca|sa|me|af)-/, "");
@@ -82,6 +82,9 @@ function getStackTags(app: App): Record<string, string> {
 // MLflow Stack
 // ========================================
 
+// Check if MLflow should be skipped
+const skipMlflow = app.node.tryGetContext("skipMlflow") === "true";
+
 // Get or generate unique deployment ID to avoid stack name collisions
 let projectPrefix = app.node.tryGetContext("projectPrefix");
 if (!projectPrefix) {
@@ -100,39 +103,48 @@ if (!projectPrefix) {
 
 const vpcId = app.node.tryGetContext("vpcId");
 const createVpc = app.node.tryGetContext("createVpc") === "true";
-const trackingServerSize = app.node.tryGetContext("trackingServerSize");
-const bucketName = app.node.tryGetContext("bucketName");
-const trackingServerNameBase = app.node.tryGetContext("trackingServerName") || "mlflow-tracking-server";
-const trackingServerName = projectPrefix
-  ? `${projectPrefix}-${trackingServerNameBase}`
-  : trackingServerNameBase;
-const allowedCidrsRaw = app.node.tryGetContext("allowedCidrs");
-const allowedCidrs = allowedCidrsRaw
-  ? (allowedCidrsRaw as string).split(",")
-  : [];
 
-// Generate unique stack name for MLflow
-const mlflowStackName = getStackName(app, "mlflow", "prod");
+let mlflowStack: MlflowStack | undefined;
 
-const mlflowStack = new MlflowStack(app, mlflowStackName, {
-  stackName: mlflowStackName, // Explicit stack name to avoid conflicts
-  vpcId: vpcId || undefined,
-  createVpc,
-  trackingServerSize: trackingServerSize as "Small" | "Medium" | "Large" | undefined,
-  bucketName: bucketName || undefined,
-  allowedCidrs,
-  trackingServerName,
-  env: {
-    account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION || "us-east-1",
-  },
-});
+if (!skipMlflow) {
+  const trackingServerSize = app.node.tryGetContext("trackingServerSize");
+  const bucketName = app.node.tryGetContext("bucketName");
+  const trackingServerNameBase = app.node.tryGetContext("trackingServerName") || "mlflow-tracking-server";
+  const trackingServerName = projectPrefix
+    ? `${projectPrefix}-${trackingServerNameBase}`
+    : trackingServerNameBase;
+  const allowedCidrsRaw = app.node.tryGetContext("allowedCidrs");
+  const allowedCidrs = allowedCidrsRaw
+    ? (allowedCidrsRaw as string).split(",")
+    : [];
 
-// Apply common tags to MLflow stack
-const commonTags = getStackTags(app);
-Object.entries(commonTags).forEach(([key, value]) => {
-  Tags.of(mlflowStack).add(key, value);
-});
+  // Generate unique stack name for MLflow
+  const mlflowStackName = getStackName(app, "mlflow", "prod");
+
+  mlflowStack = new MlflowStack(app, mlflowStackName, {
+    stackName: mlflowStackName, // Explicit stack name to avoid conflicts
+    vpcId: vpcId || undefined,
+    createVpc,
+    trackingServerSize: trackingServerSize as "Small" | "Medium" | "Large" | undefined,
+    bucketName: bucketName || undefined,
+    allowedCidrs,
+    trackingServerName,
+    env: {
+      account: process.env.CDK_DEFAULT_ACCOUNT,
+      region: app.node.tryGetContext("region") || process.env.CDK_DEFAULT_REGION || "us-east-1",
+    },
+  });
+
+  // Apply common tags to MLflow stack
+  const commonTags = getStackTags(app);
+  Object.entries(commonTags).forEach(([key, value]) => {
+    Tags.of(mlflowStack!).add(key, value);
+  });
+
+  console.log(`[INFO] MLflow stack will be deployed: ${mlflowStackName}`);
+} else {
+  console.log(`[INFO] MLflow stack deployment is skipped (skipMlflow=true)`);
+}
 
 // ========================================
 // NIXL EFA Stack
@@ -150,9 +162,13 @@ const availabilityZone = app.node.tryGetContext("availabilityZone");
 const useCapacityBlock = app.node.tryGetContext("useCapacityBlock") === "true";
 const capacityReservationId = app.node.tryGetContext("capacityReservationId");
 
-// Get MLflow ARN and artifact bucket ARN from MLflow stack output
-const mlflowArn = mlflowStack.trackingServer.attrTrackingServerArn;
-const mlflowArtifactBucketArn = mlflowStack.artifactBucket.bucketArn;
+// Get MLflow ARN and artifact bucket ARN from MLflow stack output (or use dummy values if skipped)
+const mlflowArn = mlflowStack
+  ? mlflowStack.trackingServer.attrTrackingServerArn
+  : "arn:aws:sagemaker:us-east-1:000000000000:mlflow-tracking-server/dummy";
+const mlflowArtifactBucketArn = mlflowStack
+  ? mlflowStack.artifactBucket.bucketArn
+  : "arn:aws:s3:::dummy-mlflow-artifacts";
 
 // Generate unique stack name for NIXL EFA
 const nixlEfaStackName = getStackName(app, "nixl-efa", "dev");
@@ -165,20 +181,24 @@ const nixlEfaStack = new NixlEfaStack(app, nixlEfaStackName, {
   vllmPort,
   availabilityZone,
   vpcId: vpcId || undefined,
+  createVpc,
   mlflowTrackingServerArn: mlflowArn,
   mlflowArtifactBucketArn,
   useCapacityBlock,
   capacityReservationId: capacityReservationId || undefined,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION || "us-east-1",
+    region: app.node.tryGetContext("region") || process.env.CDK_DEFAULT_REGION || "us-east-1",
   },
 });
 
-// Explicitly define stack dependency to ensure MLflow is deployed first
-nixlEfaStack.addDependency(mlflowStack);
+// Explicitly define stack dependency to ensure MLflow is deployed first (if not skipped)
+if (mlflowStack) {
+  nixlEfaStack.addDependency(mlflowStack);
+}
 
 // Apply common tags to NIXL EFA stack
+const commonTags = getStackTags(app);
 Object.entries(commonTags).forEach(([key, value]) => {
   Tags.of(nixlEfaStack).add(key, value);
 });

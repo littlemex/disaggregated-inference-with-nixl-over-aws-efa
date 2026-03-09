@@ -1,0 +1,80 @@
+{
+  "name": "Regenerate Startup Scripts with Fixed Templates",
+  "description": "起動スクリプトを修正版テンプレートから再生成",
+  "environment": {
+    "S3_BUCKET": "${S3_BUCKET}",
+    "AWS_REGION": "${AWS_REGION}",
+    "NODE1_INSTANCE_ID": "${NODE1_INSTANCE_ID}",
+    "NODE2_INSTANCE_ID": "${NODE2_INSTANCE_ID}",
+    "NODE1_PRIVATE_IP": "${NODE1_PRIVATE_IP}",
+    "NODE2_PRIVATE_IP": "${NODE2_PRIVATE_IP}",
+    "DEPLOYMENT_ID": "${DEPLOYMENT_ID}",
+    "ENGINE_ID": "${ENGINE_ID}",
+    "PRODUCER_PORT": "${PRODUCER_PORT}",
+    "CONSUMER_PORT": "${CONSUMER_PORT}",
+    "PROXY_PORT": "${PROXY_PORT}",
+    "NIXL_PORT": "${NIXL_PORT}",
+    "ZMQ_PORT": "${ZMQ_PORT}",
+    "REMOTE_USER": "${REMOTE_USER}",
+    "MODEL_NAME": "${MODEL_NAME}",
+    "PRODUCER_GPU_COUNT": "${PRODUCER_GPU_COUNT:-1}",
+    "CONSUMER_GPU_COUNT": "${CONSUMER_GPU_COUNT:-1}",
+    "GPU_MEMORY_UTILIZATION": "${GPU_MEMORY_UTILIZATION}",
+    "MAX_MODEL_LEN": "${MAX_MODEL_LEN}",
+    "MAX_NUM_BATCHED_TOKENS": "${MAX_NUM_BATCHED_TOKENS}",
+    "KV_BUFFER_SIZE": "${KV_BUFFER_SIZE}",
+    "KV_BUFFER_DEVICE": "${KV_BUFFER_DEVICE}"
+  },
+  "tasks": [
+    {
+      "id": "01-create-producer-config-dir",
+      "name": "Create Producer config directory",
+      "skip_if": "",
+      "commands": [
+        "mkdir -p /tmp/nixl-v9-producer-config-fixed"
+      ]
+    },
+    {
+      "id": "02-create-consumer-config-dir",
+      "name": "Create Consumer config directory",
+      "skip_if": "",
+      "commands": [
+        "mkdir -p /tmp/nixl-v9-consumer-config-fixed"
+      ]
+    },
+    {
+      "id": "03-regenerate-producer-startup",
+      "name": "Regenerate Producer startup script",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Regenerating Producer startup script...'",
+        "export REMOTE_USER=${REMOTE_USER}",
+        "export TENSOR_PARALLEL_SIZE=${PRODUCER_GPU_COUNT}",
+        "envsubst < templates/start_producer.sh.template > /tmp/nixl-v9-producer-config-fixed/start_producer.sh",
+        "chmod +x /tmp/nixl-v9-producer-config-fixed/start_producer.sh",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-producer-config-fixed/start_producer.sh \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node1-fixed/start_producer.sh\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node1-fixed/start_producer.sh\" \"/home/${REMOTE_USER}/start_producer.sh\"",
+        "ssm_run_and_wait \"${NODE1_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /home/ubuntu/start_producer.sh' 30",
+        "echo '[OK] Producer startup script regenerated'"
+      ]
+    },
+    {
+      "id": "04-regenerate-consumer-startup",
+      "name": "Regenerate Consumer startup script",
+      "skip_if": "",
+      "commands": [
+        "echo '[INFO] Regenerating Consumer startup script...'",
+        "export REMOTE_USER=${REMOTE_USER}",
+        "export TENSOR_PARALLEL_SIZE=${CONSUMER_GPU_COUNT}",
+        "envsubst < templates/start_consumer.sh.template > /tmp/nixl-v9-consumer-config-fixed/start_consumer.sh",
+        "chmod +x /tmp/nixl-v9-consumer-config-fixed/start_consumer.sh",
+        "source ./ssm_helper.sh",
+        "s3_upload_file /tmp/nixl-v9-consumer-config-fixed/start_consumer.sh \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2-fixed/start_consumer.sh\" \"${AWS_REGION}\"",
+        "ssm_download_from_s3 \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" \"${S3_BUCKET}\" \"configs/${DEPLOYMENT_ID}/node2-fixed/start_consumer.sh\" \"/home/${REMOTE_USER}/start_consumer.sh\"",
+        "ssm_run_and_wait \"${NODE2_INSTANCE_ID}\" \"${AWS_REGION}\" 'chmod +x /home/ubuntu/start_consumer.sh' 30",
+        "echo '[OK] Consumer startup script regenerated'"
+      ]
+    }
+  ]
+}

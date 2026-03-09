@@ -1,0 +1,23 @@
+#!/bin/bash
+##
+## Proxy Server Startup Script
+##
+## Generated from template by v9 deployment
+##
+
+set -e
+cd /home/${REMOTE_USER}
+
+# Activate PyTorch environment
+if [ -f /opt/pytorch/bin/activate ]; then
+    source /opt/pytorch/bin/activate
+fi
+
+nohup python3 disagg_proxy_server.py \
+  --prefill-url http://${NODE1_PRIVATE_IP}:${PRODUCER_PORT} \
+  --decode-url http://${NODE2_PRIVATE_IP}:${CONSUMER_PORT} \
+  --port ${PROXY_PORT} \
+  > /home/${REMOTE_USER}/proxy.log 2>&1 &
+
+echo $! > /home/${REMOTE_USER}/proxy.pid
+echo "[INFO] Proxy Server started with PID: $(cat /home/${REMOTE_USER}/proxy.pid)"
